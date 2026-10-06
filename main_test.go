@@ -2,15 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeHerdr struct {
+	mu          sync.Mutex
 	Calls       [][]string
 	Panes       []Pane
 	Agents      []Agent
@@ -18,18 +22,39 @@ type fakeHerdr struct {
 	BlockPrompt bool
 	FailTab     bool
 	FailRename  string
+	FailFocus   bool
+	GetAgent    func(Agent) Agent
+	Prompt      func(string) (Result, error)
 }
 
 func (f *fakeHerdr) Binary() string        { return "/path with spaces/herdr" }
 func (f *fakeHerdr) CheckKinds(Team) error { return nil }
 func (f *fakeHerdr) Call(args ...string) (Result, error) {
+	f.mu.Lock()
+	if len(args) > 1 && args[0] == "agent" && args[1] == "prompt" && f.Prompt != nil {
+		f.Calls = append(f.Calls, append([]string(nil), args...))
+		hook := f.Prompt
+		f.mu.Unlock()
+		return hook(args[2])
+	}
+	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, append([]string(nil), args...))
 	command := strings.Join(args[:2], " ")
 	switch command {
 	case "agent list":
-		return Result{Agents: f.Agents}, nil
+		return Result{Agents: append([]Agent(nil), f.Agents...)}, nil
+	case "agent get":
+		for _, agent := range f.Agents {
+			if agent.Name == args[2] {
+				if f.GetAgent != nil {
+					agent = f.GetAgent(agent)
+				}
+				return Result{Agent: agent}, nil
+			}
+		}
+		return Result{}, errors.New("agent not found")
 	case "pane list":
-		return Result{Panes: f.Panes}, nil
+		return Result{Panes: append([]Pane(nil), f.Panes...)}, nil
 	case "pane rename":
 		if args[2] == f.FailRename {
 			return Result{}, errors.New("pane rename failed; delivery uncertain")
@@ -57,7 +82,7 @@ func (f *fakeHerdr) Call(args ...string) (Result, error) {
 		}
 		for _, pane := range f.Panes {
 			if pane.PaneID == paneID {
-				f.Agents = append(f.Agents, Agent{Name: args[2], PaneID: paneID, TerminalID: pane.TerminalID, WorkspaceID: "w1", Kind: "any-kind"})
+				f.Agents = append(f.Agents, Agent{Name: args[2], PaneID: paneID, TerminalID: pane.TerminalID, WorkspaceID: "w1", Kind: "any-kind", Status: "idle", InteractiveReady: true})
 			}
 		}
 		return Result{}, nil
@@ -68,6 +93,9 @@ func (f *fakeHerdr) Call(args ...string) (Result, error) {
 		}
 		return Result{Agent: Agent{Status: status}}, nil
 	case "agent focus":
+		if f.FailFocus {
+			return Result{}, errors.New("focus failed")
+		}
 		return Result{}, nil
 	default:
 		return Result{}, errors.New("unexpected command: " + command)
@@ -445,5 +473,350 @@ func TestHerdrArgumentsAreLiteral(t *testing.T) {
 	}
 	if _, err := os.Stat(unwanted); !os.IsNotExist(err) {
 		t.Fatal("shell interpolation executed")
+	}
+}
+
+func TestFocusFailureKeepsReadyAndRetriesOnlyFocus(t *testing.T) {
+	project, directory, team := fixture(t)
+	client := &fakeHerdr{FailFocus: true}
+	var out bytes.Buffer
+	invoke := func() error {
+		out.Reset()
+		return initialize(team, project, "w1", directory, map[string]string{"HERDR_SOCKET_PATH": "/socket"}, client, &out)
+	}
+	if err := invoke(); err == nil || !strings.Contains(err.Error(), "focus failed") {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	if err != nil || len(paths) != 1 || !filepath.IsAbs(paths[0]) {
+		t.Fatalf("expected an absolute startup record path: %v, %v", paths, err)
+	}
+	checkOutput := func() {
+		t.Helper()
+		for _, text := range []string{"Team ready", "Startup record: " + paths[0], "Run initialization again to retry focusing the ready team."} {
+			if !strings.Contains(out.String(), text) {
+				t.Fatalf("focus failure output missing %q: %s", text, out.String())
+			}
+		}
+		if strings.Contains(out.String(), "Initialization stopped") {
+			t.Fatalf("ready team reported as partial: %s", out.String())
+		}
+	}
+	checkOutput()
+	record := startup(t, directory)
+	if record.Status != "ready" || record.Error != "" {
+		t.Fatal(record)
+	}
+	for _, member := range record.Members {
+		if !member.Initialized {
+			t.Fatal(member)
+		}
+	}
+	client.Calls = nil
+	if err := invoke(); err == nil || !strings.Contains(err.Error(), "focus failed") {
+		t.Fatalf("expected retry focus failure, got %v", err)
+	}
+	checkOutput()
+	if startup(t, directory).Status != "ready" {
+		t.Fatal("retry downgraded record")
+	}
+	client.FailFocus = false
+	client.Calls = nil
+	if err := start(t, team, project, directory, client); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.Calls) != 2 || strings.Join(client.Calls[0], " ") != "agent list" || strings.Join(client.Calls[1], " ") != "agent focus "+record.LeaderName {
+		t.Fatal(client.Calls)
+	}
+}
+
+func TestInitializationRejectsUnsafeAgentBeforePrompt(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(Agent) Agent
+	}{
+		{"busy", func(a Agent) Agent { a.Status = "working"; return a }},
+		{"blocked", func(a Agent) Agent { a.Status = "blocked"; return a }},
+		{"unknown", func(a Agent) Agent { a.Status = "unknown"; return a }},
+		{"not ready", func(a Agent) Agent { a.InteractiveReady = false; return a }},
+		{"name replaced", func(a Agent) Agent { a.Name = "replacement"; return a }},
+		{"pane replaced", func(a Agent) Agent { a.PaneID = "w1:p99"; return a }},
+		{"terminal replaced", func(a Agent) Agent { a.TerminalID = "other"; return a }},
+		{"workspace replaced", func(a Agent) Agent { a.WorkspaceID = "w99"; return a }},
+		{"kind replaced", func(a Agent) Agent { a.Kind = "other"; return a }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			project, directory, team := fixture(t)
+			client := &fakeHerdr{GetAgent: test.change}
+			if err := start(t, team, project, directory, client); err == nil {
+				t.Fatal("unsafe agent accepted")
+			}
+			for _, call := range client.Calls {
+				if call[0] == "agent" && call[1] == "prompt" {
+					t.Fatal("prompt submitted", call)
+				}
+			}
+			if startup(t, directory).Status != "partial" {
+				t.Fatal("expected partial")
+			}
+		})
+	}
+	t.Run("leader checked after ordinary members", func(t *testing.T) {
+		project, directory, team := fixture(t)
+		client := &fakeHerdr{GetAgent: func(a Agent) Agent {
+			if strings.HasSuffix(a.Name, "-leader") {
+				a.Status = "working"
+			}
+			return a
+		}}
+		if err := start(t, team, project, directory, client); err == nil {
+			t.Fatal("busy leader accepted")
+		}
+		record := startup(t, directory)
+		if record.Members[0].Initialized || !record.Members[1].Initialized {
+			t.Fatal(record)
+		}
+		for _, call := range client.Calls {
+			if call[0] == "agent" && call[1] == "prompt" && strings.HasSuffix(call[2], "-leader") {
+				t.Fatal("busy leader prompted")
+			}
+		}
+	})
+	t.Run("done and interactive ready accepted", func(t *testing.T) {
+		project, directory, team := fixture(t)
+		client := &fakeHerdr{GetAgent: func(a Agent) Agent { a.Status = "done"; return a }}
+		if err := start(t, team, project, directory, client); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func testExecutable(t *testing.T, body string) *Herdr {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "herdr")
+	write(t, path, "#!/bin/sh\n"+body)
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return &Herdr{Bin: path, Env: os.Environ()}
+}
+
+func TestHerdrNonzeroStructuredErrorAndNull(t *testing.T) {
+	client := testExecutable(t, "printf '%s\\n' '{\"error\":{\"code\":\"agent_prompt_stalled\",\"message\":\"delivery uncertain\"}}'\nprintf '%s\\n' 'stderr details' >&2\nexit 7\n")
+	for _, command := range []string{"prompt", "start"} {
+		_, err := client.Call("agent", command, "full-target", "secret-prompt-or-args")
+		if err == nil {
+			t.Fatal("expected failure")
+		}
+		for _, detail := range []string{"agent " + command + " full-target", "agent_prompt_stalled", "delivery uncertain", "stderr details", "exit status 7"} {
+			if !strings.Contains(err.Error(), detail) {
+				t.Fatalf("missing %q: %v", detail, err)
+			}
+		}
+		if strings.Contains(err.Error(), "secret-prompt-or-args") {
+			t.Fatal("sensitive command arguments leaked")
+		}
+	}
+	client = testExecutable(t, "printf '%s\\n' '{\"result\":{},\"error\":null}'\n")
+	if _, err := client.Call("agent", "get", "target"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHerdrContextTimeoutDiagnostic(t *testing.T) {
+	// exec avoids leaving a shell child holding the output pipes after timeout.
+	client := testExecutable(t, "exec /bin/sleep 30\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := client.executeContext(ctx, "agent", "prompt", "target", "secret")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "agent prompt target") || strings.Contains(err.Error(), "secret") {
+		t.Fatal(err)
+	}
+}
+
+func receiveName(t *testing.T, names <-chan string) string {
+	t.Helper()
+	select {
+	case name := <-names:
+		return name
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for controlled prompt")
+		return ""
+	}
+}
+
+func receiveCompletion(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("initialization did not complete")
+		return nil
+	}
+}
+
+func TestParallelInitializationBoundAndLeaderLast(t *testing.T) {
+	project, directory, team := fixture(t)
+	for _, id := range []string{"two", "three", "four", "five"} {
+		team.Members = append(team.Members, Member{ID: id, Kind: "any-kind"})
+	}
+	started := make(chan string, 6)
+	gates := map[string]chan struct{}{}
+	for _, member := range team.Members {
+		gates[member.ID] = make(chan struct{})
+	}
+	var inFlightMu sync.Mutex
+	inFlight, peak := 0, 0
+	client := &fakeHerdr{Prompt: func(name string) (Result, error) {
+		inFlightMu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		inFlightMu.Unlock()
+		defer func() {
+			inFlightMu.Lock()
+			inFlight--
+			inFlightMu.Unlock()
+		}()
+		id := name[strings.Index(name, "-")+1:]
+		started <- id
+		<-gates[id]
+		return Result{Agent: Agent{Status: "done"}}, nil
+	}}
+	done := make(chan error, 1)
+	go func() { done <- start(t, team, project, directory, client) }()
+	first := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		id := receiveName(t, started)
+		if id == "leader" || id == "five" || first[id] {
+			t.Fatalf("unexpected initial prompt %s", id)
+		}
+		first[id] = true
+	}
+	// Keep all four initial requests gated throughout a short observation
+	// window. Gates establish ordering; the timer only checks for extra work.
+	select {
+	case id := <-started:
+		t.Fatalf("more than four concurrent prompts: %s", id)
+	case <-time.After(100 * time.Millisecond):
+	}
+	inFlightMu.Lock()
+	initialInFlight, initialPeak := inFlight, peak
+	inFlightMu.Unlock()
+	if initialInFlight != 4 || initialPeak != 4 {
+		t.Fatalf("initial in-flight=%d, peak=%d; want four blocked requests", initialInFlight, initialPeak)
+	}
+	close(gates["dev"])
+	if id := receiveName(t, started); id != "five" {
+		t.Fatalf("want queued member, got %s", id)
+	}
+	if record := startup(t, directory); !record.Members[1].Initialized || record.Members[0].Initialized {
+		t.Fatal(record)
+	}
+	for id := range first {
+		if id != "dev" {
+			close(gates[id])
+		}
+	}
+	close(gates["five"])
+	if id := receiveName(t, started); id != "leader" {
+		t.Fatalf("leader not last: %s", id)
+	}
+	record := startup(t, directory)
+	for _, member := range record.Members[1:] {
+		if !member.Initialized {
+			t.Fatalf("leader ran before result saved: %+v", member)
+		}
+	}
+	close(gates["leader"])
+	if err := receiveCompletion(t, done); err != nil {
+		t.Fatal(err)
+	}
+	inFlightMu.Lock()
+	finalInFlight, finalPeak := inFlight, peak
+	inFlightMu.Unlock()
+	if finalInFlight != 0 || finalPeak < 4 || finalPeak > 4 {
+		t.Fatalf("final in-flight=%d, peak=%d; want zero in-flight and peak four", finalInFlight, finalPeak)
+	}
+}
+
+type observedFailure struct {
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (e *observedFailure) Error() string {
+	e.once.Do(func() { close(e.observed) })
+	return "timeout: prompt delivery uncertain"
+}
+
+func TestParallelFailureCollectsOtherMembersWithoutResending(t *testing.T) {
+	project, directory, team := fixture(t)
+	for _, id := range []string{"two", "three", "four", "five"} {
+		team.Members = append(team.Members, Member{ID: id, Kind: "any-kind"})
+	}
+	started := make(chan string, 5)
+	gates := map[string]chan struct{}{}
+	for _, member := range team.Members {
+		gates[member.ID] = make(chan struct{})
+	}
+	failure := &observedFailure{observed: make(chan struct{})}
+	client := &fakeHerdr{Prompt: func(name string) (Result, error) {
+		id := name[strings.Index(name, "-")+1:]
+		started <- id
+		<-gates[id]
+		if id == "dev" {
+			return Result{}, failure
+		}
+		return Result{Agent: Agent{Status: "done"}}, nil
+	}}
+	done := make(chan error, 1)
+	go func() { done <- start(t, team, project, directory, client) }()
+	for i := 0; i < 4; i++ {
+		if id := receiveName(t, started); id == "leader" {
+			t.Fatal("leader submitted early")
+		}
+	}
+	close(gates["dev"])
+	// Error formatting acknowledges that the coordinator has received the
+	// failure. Other in-flight requests stay blocked until that acknowledgement.
+	select {
+	case <-failure.observed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("coordinator did not observe failure")
+	}
+	for _, id := range []string{"two", "three", "four"} {
+		close(gates[id])
+	}
+	if err := receiveCompletion(t, done); err == nil || !strings.Contains(err.Error(), "delivery uncertain") {
+		t.Fatal(err)
+	}
+	record := startup(t, directory)
+	if record.Status != "partial" || record.Members[0].Initialized || record.Members[1].Initialized {
+		t.Fatal(record)
+	}
+	for _, member := range record.Members[2:5] {
+		if !member.Initialized {
+			t.Fatalf("lost in-flight success: %+v", member)
+		}
+	}
+	if record.Members[5].Initialized {
+		t.Fatal("unsent member initialized")
+	}
+	select {
+	case id := <-started:
+		t.Fatalf("unexpected extra prompt %s", id)
+	default:
+	}
+	client.Calls = nil
+	if err := start(t, team, project, directory, client); err == nil || !strings.Contains(err.Error(), "no duplicate") {
+		t.Fatal(err)
+	}
+	for _, call := range client.Calls {
+		if call[0] == "agent" && call[1] == "prompt" {
+			t.Fatal("uncertain prompt resent")
+		}
 	}
 }

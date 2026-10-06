@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -171,13 +170,14 @@ func loadTeam(project string) (Team, error) {
 }
 
 type Agent struct {
-	Name        string `json:"name"`
-	PaneID      string `json:"pane_id"`
-	TerminalID  string `json:"terminal_id"`
-	WorkspaceID string `json:"workspace_id"`
-	Kind        string `json:"agent"`
-	Status      string `json:"agent_status"`
-	Cwd         string `json:"cwd"`
+	Name             string `json:"name"`
+	PaneID           string `json:"pane_id"`
+	TerminalID       string `json:"terminal_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	Kind             string `json:"agent"`
+	Status           string `json:"agent_status"`
+	Cwd              string `json:"cwd"`
+	InteractiveReady bool   `json:"interactive_ready"`
 }
 type Pane struct {
 	PaneID     string `json:"pane_id"`
@@ -212,18 +212,50 @@ func (h *Herdr) execute(args ...string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+	return h.executeContext(ctx, args...)
+}
+
+// commandTarget includes only routing arguments, never prompt text or agent args.
+func commandTarget(args []string) string {
+	command := strings.Join(args[:min(2, len(args))], " ")
+	if len(args) > 2 && !strings.HasPrefix(args[2], "--") {
+		switch command {
+		case "agent start", "agent get", "agent prompt", "agent focus", "agent wait", "pane get", "pane rename", "pane split":
+			command += " " + args[2]
+		}
+	}
+	return command
+}
+
+func responseError(data []byte) json.RawMessage {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(data, &envelope) == nil && len(envelope.Error) > 0 && string(bytes.TrimSpace(envelope.Error)) != "null" {
+		return envelope.Error
+	}
+	return nil
+}
+
+func (h *Herdr) executeContext(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, h.Bin, args...)
 	cmd.Env = h.Env
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	data, err := cmd.Output()
 	if err != nil {
-		command := strings.Join(args[:min(2, len(args))], " ")
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = err.Error()
+		var details []string
+		if structured := responseError(data); structured != nil {
+			details = append(details, "stdout error: "+string(structured))
 		}
-		return nil, fmt.Errorf("Herdr %s: %s", command, detail)
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			details = append(details, "stderr: "+detail)
+		}
+		if ctx.Err() != nil {
+			details = append(details, ctx.Err().Error())
+			err = errors.Join(err, ctx.Err())
+		}
+		return data, fmt.Errorf("Herdr %s: %s: %w", commandTarget(args), strings.Join(details, "; "), err)
 	}
 	return data, nil
 }
@@ -237,13 +269,13 @@ func (h *Herdr) Call(args ...string) (Result, error) {
 		return Result{}, err
 	}
 	if err = json.Unmarshal(data, &envelope); err != nil {
-		return Result{}, fmt.Errorf("invalid Herdr response: %w", err)
+		return Result{}, fmt.Errorf("invalid Herdr %s response: %w", commandTarget(args), err)
 	}
-	if len(envelope.Error) > 0 {
-		return Result{}, fmt.Errorf("Herdr error: %s", envelope.Error)
+	if structured := responseError(data); structured != nil {
+		return Result{}, fmt.Errorf("Herdr %s error: %s", commandTarget(args), structured)
 	}
 	if envelope.Result == nil {
-		return Result{}, errors.New("Herdr response is missing result")
+		return Result{}, fmt.Errorf("Herdr %s response is missing result", commandTarget(args))
 	}
 	return *envelope.Result, nil
 }
@@ -412,7 +444,7 @@ func reuse(client Client, path, workspace string, out io.Writer) (bool, error) {
 		if !ok {
 			return false, errors.New("startup record has no matching leader")
 		}
-		if _, err = client.Call("agent", "focus", leader.Name); err != nil {
+		if err = focusReadyTeam(client, leader.Name, path, out); err != nil {
 			return false, err
 		}
 		fmt.Fprintf(out, "Existing team focused: %s\n", leader.Name)
@@ -431,6 +463,14 @@ func reuse(client Client, path, workspace string, out io.Writer) (bool, error) {
 	}
 	return false, nil
 }
+func focusReadyTeam(client Client, name, path string, out io.Writer) error {
+	if _, err := client.Call("agent", "focus", name); err != nil {
+		fmt.Fprintf(out, "Team ready, but focusing %s failed. Startup record: %s\nRun initialization again to retry focusing the ready team.\n", name, path)
+		return err
+	}
+	return nil
+}
+
 func shellQuote(text string) string { return "'" + strings.ReplaceAll(text, "'", "'\"'\"'") + "'" }
 func rolePrompt(team Team, member Member, state Startup, binary string) string {
 	var roster strings.Builder
@@ -481,6 +521,89 @@ When assigned work, report changes, checks and unresolved questions in your own 
 The leader reads your replies through Herdr; do not interrupt the leader with completion prompts.
 `
 }
+func initializePrompt(client Client, entry StartedMember, workspace, prompt string) error {
+	current, err := client.Call("agent", "get", entry.Name)
+	if err != nil {
+		return err
+	}
+	agent := current.Agent
+	if agent.Name != entry.Name || agent.PaneID != entry.PaneID || agent.TerminalID != entry.TerminalID || agent.WorkspaceID != workspace || agent.Kind != entry.Kind {
+		return fmt.Errorf("%s identity changed before initialization", entry.Name)
+	}
+	if (agent.Status != "idle" && agent.Status != "done") || !agent.InteractiveReady {
+		return fmt.Errorf("%s is not ready for initialization (status %s, interactive_ready %t)", entry.Name, agent.Status, agent.InteractiveReady)
+	}
+	// get and prompt are separate CLI calls. An external caller can still race
+	// this check; --wait observes lifecycle states, not a uniquely identified turn.
+	result, err := client.Call("agent", "prompt", entry.Name, prompt, "--wait", "--timeout", "120000")
+	if err != nil {
+		return err // Delivery may be uncertain: never resend automatically.
+	}
+	if result.Agent.Status != "idle" && result.Agent.Status != "done" {
+		return fmt.Errorf("%s needs user input during initialization", entry.Name)
+	}
+	return nil
+}
+
+func initializeMembers(team Team, state *Startup, path string, client Client) error {
+	type task struct {
+		index  int
+		entry  StartedMember
+		prompt string
+	}
+	type completion struct {
+		index int
+		err   error
+	}
+	var tasks []task
+	var leader task
+	for i, member := range team.Members {
+		job := task{i, state.Members[i], rolePrompt(team, member, *state, client.Binary())}
+		if member.ID == team.Leader {
+			leader = job
+		} else {
+			tasks = append(tasks, job)
+		}
+	}
+	workspace := state.WorkspaceID
+	results := make(chan completion, 4)
+	next, active := 0, 0
+	var failure error
+	for next < len(tasks) || active > 0 {
+		for failure == nil && next < len(tasks) && active < 4 {
+			job := tasks[next]
+			next++
+			active++
+			go func() {
+				results <- completion{job.index, initializePrompt(client, job.entry, workspace, job.prompt)}
+			}()
+		}
+		if active == 0 {
+			break
+		}
+		result := <-results
+		active--
+		if result.err != nil {
+			failure = errors.Join(failure, fmt.Errorf("initializing %s: %w", state.Members[result.index].Name, result.err))
+			continue
+		}
+		// Only this coordinator mutates state and writes records, including when
+		// draining in-flight results after a failure. Unsent tasks stay untouched.
+		state.Members[result.index].Initialized = true
+		if err := save(path, *state); err != nil {
+			failure = errors.Join(failure, err)
+		}
+	}
+	if failure != nil {
+		return failure
+	}
+	if err := initializePrompt(client, leader.entry, workspace, leader.prompt); err != nil {
+		return err
+	}
+	state.Members[leader.index].Initialized = true
+	return save(path, *state)
+}
+
 func initialize(team Team, project, workspace, stateDir string, env map[string]string, client Client, out io.Writer) (err error) {
 	digest := sha256.Sum256([]byte(strings.Join([]string{env["HERDR_SOCKET_PATH"], env["HERDR_SESSION"], workspace, project}, "\x00")))
 	if err = os.MkdirAll(stateDir, 0700); err != nil {
@@ -508,8 +631,9 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 	if err = save(path, state); err != nil {
 		return err
 	}
+	readySaved := false
 	defer func() {
-		if err != nil {
+		if err != nil && !readySaved {
 			state.Status = "partial"
 			state.Error = err.Error()
 			if saveErr := save(path, state); saveErr != nil {
@@ -562,32 +686,15 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 			return err
 		}
 	}
-	order := make([]int, len(team.Members))
-	for i := range order {
-		order[i] = i
-	}
-	sort.SliceStable(order, func(i, j int) bool {
-		return team.Members[order[i]].ID != team.Leader && team.Members[order[j]].ID == team.Leader
-	})
-	for _, i := range order {
-		member, entry := team.Members[i], &state.Members[i]
-		result, callErr := client.Call("agent", "prompt", entry.Name, rolePrompt(team, member, state, client.Binary()), "--wait", "--timeout", "120000")
-		if callErr != nil {
-			return callErr
-		}
-		if result.Agent.Status != "idle" && result.Agent.Status != "done" {
-			return fmt.Errorf("%s needs user input during initialization", entry.Name)
-		}
-		entry.Initialized = true
-		if err = save(path, state); err != nil {
-			return err
-		}
+	if err = initializeMembers(team, &state, path, client); err != nil {
+		return err
 	}
 	state.Status = "ready"
 	if err = save(path, state); err != nil {
 		return err
 	}
-	if _, err = client.Call("agent", "focus", state.LeaderName); err != nil {
+	readySaved = true
+	if err = focusReadyTeam(client, state.LeaderName, path, out); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Team ready. Send your goal to %s. Startup record: %s\n", state.LeaderName, path)

@@ -56,6 +56,8 @@ herdr plugin action invoke local.agent-team.start-team
 
 插件从当前 workspace/worktree 上下文取得项目目录，创建团队 tab，启动成员，注入角色和协作说明，最后聚焦 Leader。每个 pane 的名称与对应 Agent 的完整名称一致（包含团队实例前缀）。所有 panes 使用同一项目目录；不会创建 worktree 或 Git 分支。初始化程序随后退出。
 
+普通成员的角色提示最多并行初始化 4 个；全部成功后再初始化 Leader。发送提示前检查成员身份、是否处于 idle/done 状态和是否可接收输入。Herdr 不跟踪提示对应的具体回合，检查与提交之间仍可能发生外部输入；初始化期间请勿向成员额外发送指令。
+
 直接向 Leader 输入：
 
 > 实现登录功能，让 developer 开发、reviewer 评审，你负责协调和最终验证。
@@ -68,7 +70,9 @@ Leader 通过 `herdr agent prompt/wait/read` 分派并收集工作。共享文�
 
 登录、信任或权限对话需要在对应 pane 中由你处理。插件不自动批准。部分启动失败会保存已创建的成员和 pane，退出并报告启动记录的位置；不会自动关闭已有进程，也不会重复提交不确定的提示。
 
-第一版没有自动恢复：检查启动记录，手动关闭其中的团队 panes，然后重新启动。如果创建 tab 的请求超时而未返回 ID，先在 Herdr 中检查是否已创建团队 tab，清理后删除错误记录再启动。
+并行初始化中出现失败时，会收集已派出成员的结果，保留成功成员的初始化记录。若团队已经就绪，仅最后聚焦 Leader 失败，仍保留就绪状态；再次启动会复用团队并重试聚焦。
+
+部分启动失败不自动恢复：检查启动记录，手动关闭其中的团队 panes，然后重新启动。如果创建 tab 的请求超时而未返回 ID，先在 Herdr 中检查是否已创建团队 tab，清理后删除错误记录再启动。
 
 启动记录在 `HERDR_PLUGIN_STATE_DIR` 中；直接运行二进制时默认使用 `~/.local/state/herdr-agent-team`。记录按 Herdr socket、workspace 和项目路径隔离。初始化锁只覆盖启动阶段，没有常驻进程。
 
@@ -76,6 +80,7 @@ Leader 通过 `herdr agent prompt/wait/read` 分派并收集工作。共享文�
 
 ```sh
 go test ./...
+go test -race ./...
 go vet ./...
 ```
 

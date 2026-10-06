@@ -1,0 +1,15 @@
+id = "local.agent-team"
+name = "Agent Team"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Start a Markdown-defined team in the current project and coordinate through a leader agent."
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["go", "build", "-o", "bin/agent-team", "."]
+
+[[actions]]
+id = "start-team"
+title = "Start project agent team"
+contexts = ["workspace"]
+command = ["bin/agent-team"]

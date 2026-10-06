@@ -669,7 +669,7 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 		}
 		// Persist the pane identity before renaming so a failed rename keeps
 		// the same partial-startup recovery guarantees as a failed agent start.
-		if _, err = client.Call("pane", "rename", pane.PaneID, state.Members[index].Name); err != nil {
+		if _, err = client.Call("pane", "rename", pane.PaneID, member.ID); err != nil {
 			return err
 		}
 	}

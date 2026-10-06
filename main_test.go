@@ -209,7 +209,7 @@ func TestInitializeNamesRootAndSplitPanes(t *testing.T) {
 	if len(record.Members) != 2 || record.Members[0].Name != record.LeaderName {
 		t.Fatal(record)
 	}
-	var renamed int
+	var renamed, started int
 	for i, call := range client.Calls {
 		switch strings.Join(call[:2], " ") {
 		case "pane rename":
@@ -217,8 +217,8 @@ func TestInitializeNamesRootAndSplitPanes(t *testing.T) {
 				t.Fatalf("unexpected rename: %v", call)
 			}
 			member := record.Members[renamed]
-			if len(call) != 4 || call[2] != member.PaneID || call[3] != member.Name {
-				t.Fatalf("rename must use the returned pane ID and full agent name: %v", call)
+			if len(call) != 4 || call[2] != member.PaneID || call[3] != member.ID {
+				t.Fatalf("rename must use the returned pane ID and member ID: %v", call)
 			}
 			if !strings.HasPrefix(member.Name, "t") || member.Name == member.ID || !strings.HasSuffix(member.Name, "-"+member.ID) {
 				t.Fatalf("missing team instance prefix: %s", member.Name)
@@ -235,10 +235,21 @@ func TestInitializeNamesRootAndSplitPanes(t *testing.T) {
 			if renamed != len(record.Members) {
 				t.Fatal("agent started before all panes were named")
 			}
+			if started >= len(record.Members) {
+				t.Fatalf("unexpected agent start: %v", call)
+			}
+			member := record.Members[started]
+			if len(call) < 7 || call[2] != member.Name || call[5] != "--pane" || call[6] != member.PaneID {
+				t.Fatalf("agent start must use the full agent name and corresponding pane ID: %v", call)
+			}
+			started++
 		}
 	}
 	if renamed != len(record.Members) {
 		t.Fatalf("renamed %d panes, want %d", renamed, len(record.Members))
+	}
+	if started != len(record.Members) {
+		t.Fatalf("started %d agents, want %d", started, len(record.Members))
 	}
 }
 

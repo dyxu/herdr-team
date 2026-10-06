@@ -54,7 +54,7 @@ bin/agent-team --check --project /path/to/your-project
 herdr plugin action invoke local.agent-team.start-team
 ```
 
-插件从当前 workspace/worktree 上下文取得项目目录，创建团队 tab，启动成员，注入角色和协作说明，最后聚焦 Leader。每个 pane 的名称与对应 Agent 的完整名称一致（包含团队实例前缀）。所有 panes 使用同一项目目录；不会创建 worktree 或 Git 分支。初始化程序随后退出。
+插件从当前 workspace/worktree 上下文取得项目目录，创建团队 tab，启动成员，注入角色和协作说明，最后聚焦 Leader。每个 pane 使用成员 ID 命名，如 `leader`、`developer`、`reviewer`；Agent 的唯一名称仍包含团队实例前缀，如 `t255aaa28-leader`，Herdr 协作命令使用该完整名称。所有 panes 使用同一项目目录；不会创建 worktree 或 Git 分支。初始化程序随后退出。
 
 普通成员的角色提示最多并行初始化 4 个；全部成功后再初始化 Leader。发送提示前检查成员身份、是否处于 idle/done 状态和是否可接收输入。Herdr 不跟踪提示对应的具体回合，检查与提交之间仍可能发生外部输入；初始化期间请勿向成员额外发送指令。
 

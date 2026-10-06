@@ -14,7 +14,20 @@ import (
 //go:embed templates
 var builtinTemplates embed.FS
 
-func builtinTemplateNames() []string { return []string{"development", "minimal"} }
+func builtinTemplateNames() []string {
+	entries, err := builtinTemplates.ReadDir("templates")
+	if err != nil {
+		panic(fmt.Sprintf("read embedded templates: %v", err))
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names
+}
 
 func validateTemplatesDirectory(directory string) error {
 	if directory == "" {

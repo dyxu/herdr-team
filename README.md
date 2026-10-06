@@ -25,7 +25,26 @@ herdr plugin link "$PWD"
 /path/to/herdr-team --list-templates
 ```
 
-内置 `development` 模板包含 Leader、Developer、Reviewer，默认使用该模板；`minimal` 包含 Leader 和 Developer。内置模板随二进制发布。初始化只创建 `.team/`，不启动 Agent；已有 `.team`（包括文件或符号链接）时拒绝覆盖。模板先校验，再生成目录，失败不会留下半成品。
+内置模板如下，默认使用 `development`。每个模板都有 Leader 协调、场景工作流程和角色交付要求；成员类型和参数仍可修改。
+
+| 模板 | 成员 | 适用任务 |
+| --- | --- | --- |
+| `minimal` | Leader、Developer | 小任务、快速修复 |
+| `development` | Leader、Developer、Reviewer | 日常开发与评审（默认） |
+| `product` | Leader、Product Manager、Architect、Developer、QA | 从需求、架构到实现和验收 |
+| `fullstack` | Leader、Designer、Frontend、Backend、Reviewer | 前后端及界面协作 |
+| `research` | Leader、Researcher、Analyst、Reviewer | 资料调研、证据整理和分析报告 |
+| `content` | Leader、Researcher、Writer、Editor | 技术文章、教程与内容编辑 |
+| `data-analysis` | Leader、Data Engineer、Analyst、Reviewer | 数据整理、可复现分析和结论复核 |
+| `security` | Leader、Auditor、Developer、Reviewer | 项目代码安全审查、修复和验证 |
+
+例如：
+
+```sh
+bin/herdr-team --init --template fullstack --project /path/to/your-project
+```
+
+内置模板随二进制发布。初始化只创建 `.team/`，不启动 Agent；已有 `.team`（包括文件或符号链接）时拒绝覆盖。模板先校验，再生成目录，失败不会留下半成品。
 
 初始化后编辑各成员的 `kind`、`args` 和正文角色指令，以及 `TEAM.md` 的成员列表和团队规则。示例默认使用 Codex，可使用 Herdr 支持的其他类型或混合类型。也可继续手动复制本仓库的 `.team/`。
 
@@ -55,6 +74,8 @@ args: []
 ```sh
 bin/herdr-team --check --project /path/to/your-project
 ```
+
+团队分工参考 [MetaGPT](https://github.com/FoundationAgents/MetaGPT) 的产品、架构、工程角色，[Agency Agents](https://github.com/msitarzewski/agency-agents) 的前后端、设计、安全与数据角色，以及 [CrewAI examples](https://github.com/crewAIInc/crewAI-examples) 的研究、内容协作场景。这里的团队组合和角色指令为本项目编写，适配 Herdr 的 Leader 协调与共享 worktree，不需要安装上述框架。调研成员使用当前 Agent 可用工具，模板不额外提供浏览器、数据连接或工具权限。
 
 ## 自定义模板
 

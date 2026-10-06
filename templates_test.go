@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -45,23 +46,74 @@ func assertNoTeam(t *testing.T, project string) {
 	}
 }
 
+var expectedBuiltinMembers = map[string][]string{
+	"development":   {"leader", "developer", "reviewer"},
+	"minimal":       {"leader", "developer"},
+	"product":       {"leader", "product-manager", "architect", "developer", "qa"},
+	"fullstack":     {"leader", "designer", "frontend", "backend", "reviewer"},
+	"research":      {"leader", "researcher", "analyst", "reviewer"},
+	"content":       {"leader", "researcher", "writer", "editor"},
+	"data-analysis": {"leader", "data-engineer", "analyst", "reviewer"},
+	"security":      {"leader", "auditor", "developer", "reviewer"},
+}
+
+func expectedTemplateList(extra ...string) string {
+	names := map[string]bool{}
+	for name := range expectedBuiltinMembers {
+		names[name] = true
+	}
+	for _, name := range extra {
+		names[name] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\n") + "\n"
+}
+
 func TestBuiltinTemplates(t *testing.T) {
-	for _, test := range []struct {
-		name  string
-		count int
-	}{{"development", 3}, {"minimal", 2}} {
-		t.Run(test.name, func(t *testing.T) {
+	if got := strings.Join(builtinTemplateNames(), "\n") + "\n"; got != expectedTemplateList() {
+		t.Fatalf("built-in discovery: %q", got)
+	}
+	for name, expected := range expectedBuiltinMembers {
+		t.Run(name, func(t *testing.T) {
 			project := t.TempDir()
-			if err := initFromTemplate(project, test.name, ""); err != nil {
+			if err := initFromTemplate(project, name, ""); err != nil {
 				t.Fatal(err)
 			}
 			team, err := loadTeam(project)
-			if err != nil || len(team.Members) != test.count || team.Leader != "leader" {
+			if err != nil || team.Leader != "leader" || strings.TrimSpace(team.Instructions) == "" {
 				t.Fatalf("%+v %v", team, err)
 			}
+			ids := make([]string, 0, len(team.Members))
+			paths := make([]string, 0, len(team.Members))
 			for _, member := range team.Members {
-				if member.Kind != "codex" || len(member.Args) != 0 {
+				ids = append(ids, member.ID)
+				paths = append(paths, "members/"+member.ID+".md")
+				if member.Kind != "codex" || len(member.Args) != 0 || strings.TrimSpace(member.Instructions) == "" {
 					t.Fatal(member)
+				}
+				if name != "development" && name != "minimal" {
+					if member.ID == "reviewer" || member.ID == "editor" || member.ID == "auditor" {
+						if !strings.Contains(member.Instructions, "默认只读") {
+							t.Fatalf("missing read-only boundary: %s/%s", name, member.ID)
+						}
+					}
+					if member.ID == "leader" && !strings.Contains(member.Instructions, "实际成员名单") {
+						t.Fatalf("leader ignores roster: %s", name)
+					}
+				}
+			}
+			if !reflect.DeepEqual(ids, expected) || !reflect.DeepEqual(team.Paths, paths) {
+				t.Fatalf("%s roster=%v paths=%v want=%v", name, ids, team.Paths, expected)
+			}
+			if name != "development" && name != "minimal" {
+				for _, required := range []string{"## 目标", "## 工作流程", "## 交接产物", "共享 worktree", "保留已有改动", "排定顺序", "Git", "Leader 统一协调", "后台服务"} {
+					if !strings.Contains(team.Instructions, required) {
+						t.Fatalf("%s missing %q", name, required)
+					}
 				}
 			}
 		})
@@ -296,7 +348,7 @@ func TestTemplateCLIConflictsAndListing(t *testing.T) {
 	if err := run([]string{"--list-templates"}, []string{"HERDR_ENV=1", "HERDR_PLUGIN_CONTEXT_JSON=invalid"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "development\nminimal\n" {
+	if out.String() != expectedTemplateList() {
 		t.Fatal(out.String())
 	}
 }
@@ -436,10 +488,10 @@ func TestListConfiguredTemplates(t *testing.T) {
 		args, env []string
 		want      string
 	}{
-		{[]string{"--list-templates", "--templates-dir", root}, nil, "alpha\ndevelopment\nminimal\nzebra\n"},
-		{[]string{"--list-templates"}, []string{"HERDR_TEAM_TEMPLATES_DIR=" + root, "HERDR_ENV=1", "HERDR_PLUGIN_CONTEXT_JSON=invalid"}, "alpha\ndevelopment\nminimal\nzebra\n"},
-		{[]string{"--list-templates", "--templates-dir", root}, []string{"HERDR_TEAM_TEMPLATES_DIR=/invalid"}, "alpha\ndevelopment\nminimal\nzebra\n"},
-		{[]string{"--list-templates", "--templates-dir="}, []string{"HERDR_TEAM_TEMPLATES_DIR=/invalid"}, "development\nminimal\n"},
+		{[]string{"--list-templates", "--templates-dir", root}, nil, expectedTemplateList("alpha", "development", "zebra")},
+		{[]string{"--list-templates"}, []string{"HERDR_TEAM_TEMPLATES_DIR=" + root, "HERDR_ENV=1", "HERDR_PLUGIN_CONTEXT_JSON=invalid"}, expectedTemplateList("alpha", "development", "zebra")},
+		{[]string{"--list-templates", "--templates-dir", root}, []string{"HERDR_TEAM_TEMPLATES_DIR=/invalid"}, expectedTemplateList("alpha", "development", "zebra")},
+		{[]string{"--list-templates", "--templates-dir="}, []string{"HERDR_TEAM_TEMPLATES_DIR=/invalid"}, expectedTemplateList()},
 	} {
 		var out bytes.Buffer
 		if err := run(test.args, test.env, &out); err != nil {

@@ -1,6 +1,6 @@
-# Herdr Agent Team 简化方案
+# Herdr Team 简化方案
 
-只实现两个功能：在当前 Herdr 项目中按团队定义启动多个 Agent；用户在 Leader pane 中下达指令，由 Leader 通过 Herdr 协调成员完成开发任务。
+实现模板初始化 `.team`、在当前 Herdr 项目中按团队定义启动多个 Agent，以及由 Leader 通过 Herdr 协调成员完成开发任务。
 
 ## 团队定义
 
@@ -47,9 +47,15 @@ args: []
 
 kind 和 args 是交给 Herdr 的启动配置。示例中的 codex 可以替换为其他 Herdr 支持的 Agent；插件不包含厂商专用逻辑。Agent 需要能执行 shell 命令，以使用 Herdr 协作。
 
-## 初始化
+## 模板初始化
 
-插件只提供一个 `start-team` action。
+`--init` 独立生成 `.team`，不启动团队。`--template` 默认 `development`，另提供两人成员的 `minimal`；内置模板通过 Go embed 随二进制发布。模板结构与团队定义相同，用户可直接指定模板目录，或通过 `--templates-dir` / `HERDR_TEAM_TEMPLATES_DIR` 配置命名模板根目录。同名用户模板优先内置模板；模板内容保留，成员类型、参数、角色及团队规则通过 Markdown 配置。
+
+源模板按现有团队定义规则验证，拒绝符号链接和特殊文件。先在项目目录暂存完整结果，再安装为 `.team`；已有目标拒绝覆盖，失败清理暂存目录。`--list-templates` 列出可选模板，三个离线操作 `--init`、`--check`、`--list-templates` 互斥。Herdr 初始化 action 使用当前项目上下文，离线初始化使用当前目录或显式 `--project`。
+
+## 团队启动
+
+插件 ID 为 `local.herdr-team`，提供 `init-team` 和 `start-team` actions，分别生成 `.team` 和启动团队；启动通过 `herdr plugin action invoke local.herdr-team.start-team` 调用。Go module 和 CLI 名称为 `herdr-team`，二进制为 `bin/herdr-team`。
 
 1. 从 Herdr 当前项目上下文取得项目目录，读取 `.team/TEAM.md`。
 2. 检查成员定义、Leader 引用和本机 Herdr 支持的 kind；启动程序可用性由 Herdr 启动接口检查。
@@ -94,6 +100,8 @@ herdr agent read <成员名称> --lines 120
 插件只需 `herdr-plugin.toml` 和一个初始化程序。程序负责解析 Markdown、创建 panes、在同一项目目录启动 Agent、注入指令和聚焦 Leader；日常协作由 Leader 使用 Herdr 完成。
 
 保留一份小的启动结果文件，记录项目目录、本次创建的成员名称和 pane，便于部分启动失败时说明已启动的成员。重复初始化发现当前项目已有存活团队时，聚焦已有 Leader，避免再次启动。
+
+状态目录优先使用 `HERDR_PLUGIN_STATE_DIR`；未设置时保留历史兼容路径 `~/.local/state/herdr-agent-team`，避免仅 CLI 改名改变默认路径。插件 ID 或项目目录变化仍可能改变状态目录或记录键，不能保证识别旧团队；不自动迁移记录，再次启动前应检查并关闭旧团队。
 
 不实现后台控制器、任务数据库、消息队列、自定义通信协议、管理面板或自动恢复。第一版仅要求固定成员启动成功，并能在 Leader 的指挥下协作完成一次开发任务。
 

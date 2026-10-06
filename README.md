@@ -1,4 +1,4 @@
-# Herdr Agent Team
+# Herdr Team
 
 一个轻量 Herdr 插件：按 `.team` 中的 Markdown 定义启动团队，之后直接向 Leader 下达开发指令。所有成员在当前项目的同一个 worktree 中工作，通信使用 Herdr。没有后台服务或任务数据库。
 
@@ -9,7 +9,7 @@
 在插件源码目录执行：
 
 ```sh
-go build -o bin/agent-team .
+go build -o bin/herdr-team .
 herdr plugin link "$PWD"
 ```
 
@@ -17,7 +17,17 @@ herdr plugin link "$PWD"
 
 ## 定义团队
 
-将本仓库的 `.team/` 复制到你的项目，编辑各成员的 `kind` 和 `args`。示例默认使用 Codex，只是示例配置；可使用 Herdr 支持的其他类型或混合类型。
+在目标项目中执行初始化命令，或从 Herdr action palette 选择 **Initialize project Herdr Team**：
+
+```sh
+/path/to/herdr-team --init
+/path/to/herdr-team --init --template minimal --project /path/to/your-project
+/path/to/herdr-team --list-templates
+```
+
+内置 `development` 模板包含 Leader、Developer、Reviewer，默认使用该模板；`minimal` 包含 Leader 和 Developer。内置模板随二进制发布。初始化只创建 `.team/`，不启动 Agent；已有 `.team`（包括文件或符号链接）时拒绝覆盖。模板先校验，再生成目录，失败不会留下半成品。
+
+初始化后编辑各成员的 `kind`、`args` 和正文角色指令，以及 `TEAM.md` 的成员列表和团队规则。示例默认使用 Codex，可使用 Herdr 支持的其他类型或混合类型。也可继续手动复制本仓库的 `.team/`。
 
 ```text
 your-project/
@@ -43,15 +53,34 @@ args: []
 插件把 `args` 原样传给 Agent，不解释厂商参数。成员必须能执行 shell 命令。可以先离线检查配置：
 
 ```sh
-bin/agent-team --check --project /path/to/your-project
+bin/herdr-team --check --project /path/to/your-project
 ```
+
+## 自定义模板
+
+模板目录使用与 `.team/` 相同的结构，包含 `TEAM.md` 和成员 Markdown 文件。可以直接指定目录：
+
+```sh
+bin/herdr-team --init --template /path/to/my-template --project /path/to/your-project
+```
+
+也可以将多个模板放入一个目录，每个子目录名称就是模板名称，例如 `my-templates/backend/TEAM.md`：
+
+```sh
+bin/herdr-team --init --templates-dir /path/to/my-templates --template backend
+bin/herdr-team --list-templates --templates-dir /path/to/my-templates
+```
+
+`HERDR_TEAM_TEMPLATES_DIR` 可设置默认模板目录，`--templates-dir` 优先于该环境变量。按名称选择时，先查用户模板，再查内置模板；用户模板可以覆盖同名内置模板；`--templates-dir=` 可清除环境变量设置。直接指定本地目录时建议使用 `./NAME` 或绝对路径。模板中的 `kind`、`args`、成员和指令都可配置，初始化复制模板内容，不做字符串替换。模板中的符号链接和特殊文件不支持；源模板目录不能等于或包含目标项目目录。
+
+`--init`、`--check`、`--list-templates` 互斥；`--template` 用于初始化，`--templates-dir` 用于初始化或列出模板。离线初始化默认当前目录；在 Herdr 中未指定 `--project` 时使用当前项目上下文。
 
 ## 启动与使用
 
-在 Herdr 中进入目标项目，从 action palette 选择 **Start project agent team**。也可以在该项目的 Herdr pane 中执行：
+在 Herdr 中进入目标项目，从 action palette 选择 **Start project Herdr Team**。也可以在该项目的 Herdr pane 中执行：
 
 ```sh
-herdr plugin action invoke local.agent-team.start-team
+herdr plugin action invoke local.herdr-team.start-team
 ```
 
 插件从当前 workspace/worktree 上下文取得项目目录，创建团队 tab，启动成员，注入角色和协作说明，最后聚焦 Leader。每个 pane 使用成员 ID 命名，如 `leader`、`developer`、`reviewer`；Agent 的唯一名称仍包含团队实例前缀，如 `t255aaa28-leader`，Herdr 协作命令使用该完整名称。所有 panes 使用同一项目目录；不会创建 worktree 或 Git 分支。初始化程序随后退出。
@@ -74,7 +103,7 @@ Leader 通过 `herdr agent prompt/wait/read` 分派并收集工作。共享文�
 
 部分启动失败不自动恢复：检查启动记录，手动关闭其中的团队 panes，然后重新启动。如果创建 tab 的请求超时而未返回 ID，先在 Herdr 中检查是否已创建团队 tab，清理后删除错误记录再启动。
 
-启动记录在 `HERDR_PLUGIN_STATE_DIR` 中；直接运行二进制时默认使用 `~/.local/state/herdr-agent-team`。记录按 Herdr socket、workspace 和项目路径隔离。初始化锁只覆盖启动阶段，没有常驻进程。
+启动记录在 `HERDR_PLUGIN_STATE_DIR` 中；未设置该变量时，默认仍使用历史兼容路径 `~/.local/state/herdr-agent-team`，避免仅 CLI 改名改变默认状态目录。插件 ID 改变可能改变 Herdr 提供的状态目录，移动项目目录会改变启动记录的键；这些情况下不会自动迁移或识别旧记录，再次启动前应检查并关闭旧团队。记录按 Herdr socket、workspace 和项目路径隔离。初始化锁只覆盖启动阶段，没有常驻进程。
 
 ## 开发与验证
 

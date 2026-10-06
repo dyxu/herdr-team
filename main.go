@@ -1,4 +1,4 @@
-// Agent Team initializes a Markdown-defined team in a Herdr project.
+// Herdr Team initializes a Markdown-defined team in a Herdr project.
 package main
 
 import (
@@ -701,15 +701,84 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 	return nil
 }
 func run(args []string, entries []string, out io.Writer) error {
-	flags := flag.NewFlagSet("agent-team", flag.ContinueOnError)
+	flags := flag.NewFlagSet("herdr-team", flag.ContinueOnError)
 	flags.SetOutput(out)
 	projectFlag := flags.String("project", "", "override the current project directory")
 	check := flags.Bool("check", false, "validate team files only; do not contact a running Herdr session")
+	initTeam := flags.Bool("init", false, "create .team from a template; do not start agents")
+	listTemplates := flags.Bool("list-templates", false, "list built-in and configured templates offline")
+	template := flags.String("template", "development", "template name or directory (with TEAM.md and members)")
+	templatesDir := flags.String("templates-dir", "", "named templates directory (default: HERDR_TEAM_TEMPLATES_DIR)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	modes := 0
+	for _, enabled := range []bool{*check, *initTeam, *listTemplates} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return errors.New("--init, --check and --list-templates are mutually exclusive")
+	}
+	var templateOption, directoryOption bool
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "template" {
+			templateOption = true
+		}
+		if f.Name == "templates-dir" {
+			directoryOption = true
+		}
+	})
+	if templateOption && !*initTeam {
+		return errors.New("--template requires --init")
+	}
+	if directoryOption && !*initTeam && !*listTemplates {
+		return errors.New("--templates-dir requires --init or --list-templates")
+	}
+	env := envMap(entries)
+	directory := env["HERDR_TEAM_TEMPLATES_DIR"]
+	if directoryOption {
+		directory = *templatesDir
+	}
+	if *listTemplates {
+		names, err := availableTemplateNames(directory)
+		if err != nil {
+			return err
+		}
+		for _, name := range names {
+			fmt.Fprintln(out, name)
+		}
+		return nil
+	}
+	if *initTeam {
+		path := *projectFlag
+		if path == "" && env["HERDR_ENV"] == "1" {
+			binary := env["HERDR_BIN_PATH"]
+			if binary == "" {
+				binary = "herdr"
+			}
+			var err error
+			path, _, err = resolveProject(env, &Herdr{Env: entries, Bin: binary}, "")
+			if err != nil {
+				return err
+			}
+		}
+		if path == "" {
+			path = "."
+		}
+		project, err := canonical(path)
+		if err != nil {
+			return err
+		}
+		if err = initFromTemplate(project, *template, directory); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Created %s from template %s. Edit TEAM.md and members/*.md to configure roles, kind and args.\n", filepath.Join(project, ".team"), *template)
+		return nil
 	}
 	if *check {
 		path := *projectFlag
@@ -727,7 +796,6 @@ func run(args []string, entries []string, out io.Writer) error {
 		fmt.Fprintf(out, "Valid team: %s; leader=%s; members=%d\n", team.Name, team.Leader, len(team.Members))
 		return nil
 	}
-	env := envMap(entries)
 	if env["HERDR_ENV"] != "1" {
 		return errors.New("not running inside Herdr; invoke start-team from a Herdr project")
 	}
@@ -750,6 +818,7 @@ func run(args []string, entries []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		// Keep the historical default directory when renaming the CLI.
 		stateDir = filepath.Join(home, ".local", "state", "herdr-agent-team")
 	}
 	return initialize(team, project, workspace, stateDir, env, client, out)
@@ -759,7 +828,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintf(os.Stderr, "agent-team: %v\n", err)
+		fmt.Fprintf(os.Stderr, "herdr-team: %v\n", err)
 		os.Exit(1)
 	}
 }

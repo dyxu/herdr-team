@@ -1,4 +1,4 @@
-module herdr-agent-team
+module herdr-team
 
 go 1.23
 

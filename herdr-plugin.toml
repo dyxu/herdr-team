@@ -1,15 +1,21 @@
-id = "local.agent-team"
-name = "Agent Team"
+id = "local.herdr-team"
+name = "Herdr Team"
 version = "0.1.0"
 min_herdr_version = "0.9.3"
-description = "Start a Markdown-defined team in the current project and coordinate through a leader agent."
+description = "Initialize configurable team templates and start a Markdown-defined team coordinated by a leader agent."
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["go", "build", "-o", "bin/agent-team", "."]
+command = ["go", "build", "-o", "bin/herdr-team", "."]
 
 [[actions]]
 id = "start-team"
-title = "Start project agent team"
+title = "Start project Herdr Team"
 contexts = ["workspace"]
-command = ["bin/agent-team"]
+command = ["bin/herdr-team"]
+
+[[actions]]
+id = "init-team"
+title = "Initialize project Herdr Team"
+contexts = ["workspace"]
+command = ["bin/herdr-team", "--init"]

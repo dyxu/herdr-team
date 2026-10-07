@@ -185,12 +185,12 @@ func TestTemplatesDirectoryPrecedence(t *testing.T) {
 
 func TestInvalidTemplatesLeaveNoOutput(t *testing.T) {
 	bad := t.TempDir()
-	write(t, filepath.Join(bad, "TEAM.md"), "bad markdown")
+	write(t, filepath.Join(bad, "team.md"), "bad markdown")
 	named := t.TempDir()
 	if err := os.Mkdir(filepath.Join(named, "development"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(named, "development", "TEAM.md"), "bad markdown")
+	write(t, filepath.Join(named, "development", "team.md"), "bad markdown")
 	file := filepath.Join(t.TempDir(), "file")
 	write(t, file, "file")
 	for _, test := range []struct{ name, directory, want string }{
@@ -218,7 +218,7 @@ func TestTemplateRejectsLinksAndSpecialFiles(t *testing.T) {
 			path := filepath.Join(source, "extra")
 			switch kind {
 			case "link":
-				if err := os.Symlink(filepath.Join(source, "TEAM.md"), path); err != nil {
+				if err := os.Symlink(filepath.Join(source, "team.md"), path); err != nil {
 					t.Fatal(err)
 				}
 			case "dangling":
@@ -475,13 +475,13 @@ func TestListConfiguredTemplates(t *testing.T) {
 	if err := copyTemplate(os.DirFS(templateFixture(t)), filepath.Join(root, "linked-member")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("TEAM.md", filepath.Join(root, "linked-member", "extra")); err != nil {
+	if err := os.Symlink("team.md", filepath.Join(root, "linked-member", "extra")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, "team-is-directory"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(root, "team-is-directory", "TEAM.md"), 0755); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "team-is-directory", "team.md"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {

@@ -115,7 +115,7 @@ func fixture(t *testing.T) (string, string, Team) {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(project, ".team", "TEAM.md"), "---\nname: development\nleader: leader\nmembers:\n  - members/leader.md\n  - members/dev.md\n---\nShared rules")
+	write(t, filepath.Join(project, ".team", "team.md"), "---\nname: development\nleader: leader\nmembers:\n  - members/leader.md\n  - members/dev.md\n---\nShared rules")
 	for _, id := range []string{"leader", "dev"} {
 		write(t, filepath.Join(directory, id+".md"), "---\nid: "+id+"\nkind: any-kind\nargs: ['--model', 'a b']\n---\nRole for "+id)
 	}
@@ -387,12 +387,12 @@ func TestUncertainTabCreationNotRetried(t *testing.T) {
 }
 func TestInvalidDefinitions(t *testing.T) {
 	cases := []struct{ name, file, from, to string }{
-		{"leader missing", "TEAM.md", "leader: leader", "leader: missing"},
+		{"leader missing", "team.md", "leader: leader", "leader: missing"},
 		{"duplicate ID", "members/dev.md", "id: dev", "id: leader"},
-		{"duplicate key", "TEAM.md", "name: development", "name: development\nname: other"},
+		{"duplicate key", "team.md", "name: development", "name: development\nname: other"},
 		{"unknown field", "members/dev.md", "id: dev", "id: dev\nextra: value"},
 		{"invalid args", "members/dev.md", "['--model', 'a b']", "[123]"},
-		{"invalid path", "TEAM.md", "members/dev.md", "../outside.md"},
+		{"invalid path", "team.md", "members/dev.md", "../outside.md"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

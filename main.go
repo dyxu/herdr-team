@@ -112,7 +112,7 @@ func loadTeam(project string) (Team, error) {
 	if err != nil {
 		return team, err
 	}
-	team.Instructions, err = markdown(filepath.Join(directory, "TEAM.md"), &team)
+	team.Instructions, err = markdown(filepath.Join(directory, "team.md"), &team)
 	if err != nil {
 		return team, err
 	}
@@ -707,7 +707,7 @@ func run(args []string, entries []string, out io.Writer) error {
 	check := flags.Bool("check", false, "validate team files only; do not contact a running Herdr session")
 	initTeam := flags.Bool("init", false, "create .team from a template; do not start agents")
 	listTemplates := flags.Bool("list-templates", false, "list built-in and configured templates offline")
-	template := flags.String("template", "development", "template name or directory (with TEAM.md and members)")
+	template := flags.String("template", "development", "template name or directory (with team.md and members)")
 	templatesDir := flags.String("templates-dir", "", "named templates directory (default: HERDR_TEAM_TEMPLATES_DIR)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -777,7 +777,7 @@ func run(args []string, entries []string, out io.Writer) error {
 		if err = initFromTemplate(project, *template, directory); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Created %s from template %s. Edit TEAM.md and members/*.md to configure roles, kind and args.\n", filepath.Join(project, ".team"), *template)
+		fmt.Fprintf(out, "Created %s from template %s. Edit team.md and members/*.md to configure roles, kind and args.\n", filepath.Join(project, ".team"), *template)
 		return nil
 	}
 	if *check {

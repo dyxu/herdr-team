@@ -42,14 +42,14 @@ herdr plugin link "$PWD"
 
 ```text
 .team/
-  TEAM.md
+  team.md
   members/
     leader.md
     developer.md
     reviewer.md
 ```
 
-`TEAM.md` 定义团队名称、Leader 和成员文件，正文填写团队规则：
+`team.md` 定义团队名称、Leader 和成员文件，正文填写团队规则：
 
 ```markdown
 ---
@@ -90,7 +90,7 @@ bin/herdr-team --check --project /path/to/your-project
 bin/herdr-team --init --template ./my-template --project /path/to/your-project
 ```
 
-也可以集中存放模板，每个子目录是一个模板，例如 `my-templates/backend/TEAM.md`：
+也可以集中存放模板，每个子目录是一个模板，例如 `my-templates/backend/team.md`：
 
 ```sh
 bin/herdr-team --init --templates-dir ./my-templates --template backend

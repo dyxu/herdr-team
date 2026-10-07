@@ -6,14 +6,14 @@
 
 ```text
 .team/
-  TEAM.md
+  team.md
   members/
     leader.md
     developer.md
     reviewer.md
 ```
 
-TEAM.md 使用 YAML frontmatter 描述成员，正文描述共同规则：
+team.md 使用 YAML frontmatter 描述成员，正文描述共同规则：
 
 ```markdown
 ---
@@ -57,7 +57,7 @@ kind 和 args 是交给 Herdr 的启动配置。示例中的 codex 可以替换�
 
 插件 ID 为 `local.herdr-team`，提供 `init-team` 和 `start-team` actions，分别生成 `.team` 和启动团队；启动通过 `herdr plugin action invoke local.herdr-team.start-team` 调用。Go module 和 CLI 名称为 `herdr-team`，二进制为 `bin/herdr-team`。
 
-1. 从 Herdr 当前项目上下文取得项目目录，读取 `.team/TEAM.md`。
+1. 从 Herdr 当前项目上下文取得项目目录，读取 `.team/team.md`。
 2. 检查成员定义、Leader 引用和本机 Herdr 支持的 kind；启动程序可用性由 Herdr 启动接口检查。
 3. 在当前项目的团队 tab 中创建成员 panes，全部使用当前项目目录，通过 `herdr agent start` 启动成员。
 4. 检查普通成员的身份、idle/done 状态与交互就绪情况，最多并行向 4 个成员发送团队规则、成员角色、成员名单、实际 Herdr 名称和共享工作区路径。由协调流程逐成员保存结果；失败时收集已派出的其他成员结果。

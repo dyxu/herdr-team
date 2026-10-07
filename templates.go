@@ -62,7 +62,7 @@ func availableTemplateNames(directory string) ([]string, error) {
 				continue
 			}
 			path := filepath.Join(directory, entry.Name())
-			info, err := os.Lstat(filepath.Join(path, "TEAM.md"))
+			info, err := os.Lstat(filepath.Join(path, "team.md"))
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}

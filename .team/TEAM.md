@@ -1,5 +1,5 @@
 ---
-name: development-team
+name: dev-team
 leader: leader
 members:
   - members/leader.md

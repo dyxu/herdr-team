@@ -1,4 +1,4 @@
-id = "local.herdr-team"
+id = "herdr-team"
 name = "Herdr Team"
 version = "0.1.0"
 min_herdr_version = "0.9.3"

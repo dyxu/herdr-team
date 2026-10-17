@@ -449,6 +449,24 @@ func TestOutsideHerdrAndOfflineCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestCheckHerdrProjectResolution(t *testing.T) {
+	project, _, _ := fixture(t)
+	// Plugin actions run from the plugin directory, not the target project.
+	templateTestChdir(t, t.TempDir())
+	for _, invocation := range []map[string]any{
+		{"workspace_id": "w1", "workspace_cwd": project},
+		{"workspace_id": "w1", "workspace_cwd": "/wrong", "worktree": map[string]string{"checkout_path": project}},
+	} {
+		raw, _ := json.Marshal(invocation)
+		env := []string{"HERDR_ENV=1", "HERDR_PLUGIN_CONTEXT_JSON=" + string(raw), "HERDR_BIN_PATH=/must-not-start-agents"}
+		if err := run([]string{"--check"}, env, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := run([]string{"--check", "--project", t.TempDir()}, env, &bytes.Buffer{}); err == nil {
+			t.Fatal("explicit project override was ignored")
+		}
+	}
+}
 func TestInitializationLock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "startup.lock")
 	release, err := lock(path)

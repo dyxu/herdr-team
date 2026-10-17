@@ -19,3 +19,21 @@ id = "init-team"
 title = "Initialize project Herdr Team"
 contexts = ["workspace"]
 command = ["bin/herdr-team", "--init"]
+
+[[actions]]
+id = "list-templates"
+title = "List Herdr Team templates"
+contexts = ["workspace"]
+command = ["bin/herdr-team", "--list-templates"]
+
+[[actions]]
+id = "init-fullstack"
+title = "Initialize project fullstack Herdr Team"
+contexts = ["workspace"]
+command = ["bin/herdr-team", "--init", "--template", "fullstack"]
+
+[[actions]]
+id = "check-team"
+title = "Check project Herdr Team configuration"
+contexts = ["workspace"]
+command = ["bin/herdr-team", "--check"]

@@ -704,7 +704,7 @@ func run(args []string, entries []string, out io.Writer) error {
 	flags := flag.NewFlagSet("herdr-team", flag.ContinueOnError)
 	flags.SetOutput(out)
 	projectFlag := flags.String("project", "", "override the current project directory")
-	check := flags.Bool("check", false, "validate team files only; do not contact a running Herdr session")
+	check := flags.Bool("check", false, "validate team files only; use current project context inside Herdr")
 	initTeam := flags.Bool("init", false, "create .team from a template; do not start agents")
 	listTemplates := flags.Bool("list-templates", false, "list built-in and configured templates offline")
 	template := flags.String("template", "development", "template name or directory (with team.md and members)")
@@ -754,7 +754,7 @@ func run(args []string, entries []string, out io.Writer) error {
 		}
 		return nil
 	}
-	if *initTeam {
+	if *initTeam || *check {
 		path := *projectFlag
 		if path == "" && env["HERDR_ENV"] == "1" {
 			binary := env["HERDR_BIN_PATH"]
@@ -774,26 +774,18 @@ func run(args []string, entries []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if *check {
+			team, err := loadTeam(project)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Valid team: %s; leader=%s; members=%d\n", team.Name, team.Leader, len(team.Members))
+			return nil
+		}
 		if err = initFromTemplate(project, *template, directory); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "Created %s from template %s. Edit team.md and members/*.md to configure roles, kind and args.\n", filepath.Join(project, ".team"), *template)
-		return nil
-	}
-	if *check {
-		path := *projectFlag
-		if path == "" {
-			path = "."
-		}
-		project, err := canonical(path)
-		if err != nil {
-			return err
-		}
-		team, err := loadTeam(project)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Valid team: %s; leader=%s; members=%d\n", team.Name, team.Leader, len(team.Members))
 		return nil
 	}
 	if env["HERDR_ENV"] != "1" {

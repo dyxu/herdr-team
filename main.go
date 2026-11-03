@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -260,15 +259,29 @@ func (h *Herdr) executeContext(ctx context.Context, args ...string) ([]byte, err
 	return data, nil
 }
 func (h *Herdr) Call(args ...string) (Result, error) {
-	var envelope struct {
-		Result *Result         `json:"result"`
-		Error  json.RawMessage `json:"error"`
-	}
 	data, err := h.execute(args...)
 	if err != nil {
 		return Result{}, err
 	}
-	if err = json.Unmarshal(data, &envelope); err != nil {
+	return decodeHerdrResult(data, args...)
+}
+
+// CallContext allows callers with a total operation budget to bound the CLI
+// subprocess too, rather than only the pauses between repeated calls.
+func (h *Herdr) CallContext(ctx context.Context, args ...string) (Result, error) {
+	data, err := h.executeContext(ctx, args...)
+	if err != nil {
+		return Result{}, err
+	}
+	return decodeHerdrResult(data, args...)
+}
+
+func decodeHerdrResult(data []byte, args ...string) (Result, error) {
+	var envelope struct {
+		Result *Result         `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
 		return Result{}, fmt.Errorf("invalid Herdr %s response: %w", commandTarget(args), err)
 	}
 	if structured := responseError(data); structured != nil {
@@ -284,17 +297,13 @@ func (h *Herdr) CheckKinds(team Team) error {
 	if err != nil {
 		return err
 	}
-	match := regexp.MustCompile(`possible values:\s*([^\]]+)\]`).FindSubmatch(data)
-	if len(match) != 2 {
-		return errors.New("cannot read agent kinds from this Herdr version")
-	}
-	supported := map[string]bool{}
-	for _, kind := range strings.Split(string(match[1]), ",") {
-		supported[strings.TrimSpace(kind)] = true
+	supported, err := parseAgentKindsHelp(string(data))
+	if err != nil {
+		return fmt.Errorf("cannot read supported agent kinds from %s: %w; run %s agent start --help and check Herdr compatibility (requires 0.9.3+)", h.versionLabel(), err, shellQuote(h.Bin))
 	}
 	for _, member := range team.Members {
 		if !supported[member.Kind] {
-			return fmt.Errorf("Herdr does not support agent kind %q", member.Kind)
+			return fmt.Errorf("%s does not support agent kind %q for member %q; supported kinds: %s; edit that member's kind or use a compatible Herdr version", h.versionLabel(), member.Kind, member.ID, strings.Join(sortedKinds(supported), ", "))
 		}
 	}
 	return nil
@@ -381,13 +390,15 @@ type StartedMember struct {
 	Initialized bool   `json:"initialized"`
 }
 type Startup struct {
-	Project     string          `json:"project"`
-	WorkspaceID string          `json:"workspace_id"`
-	Status      string          `json:"status"`
-	TabID       string          `json:"tab_id"`
-	LeaderName  string          `json:"leader_name"`
-	Members     []StartedMember `json:"members"`
-	Error       string          `json:"error,omitempty"`
+	ConfigDigest string          `json:"config_digest,omitempty"`
+	Stage        string          `json:"stage,omitempty"`
+	Project      string          `json:"project"`
+	WorkspaceID  string          `json:"workspace_id"`
+	Status       string          `json:"status"`
+	TabID        string          `json:"tab_id"`
+	LeaderName   string          `json:"leader_name"`
+	Members      []StartedMember `json:"members"`
+	Error        string          `json:"error,omitempty"`
 }
 
 func save(path string, state Startup) error {
@@ -412,7 +423,7 @@ func lock(path string) (func(), error) {
 	}
 	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); file.Close() }, nil
 }
-func reuse(client Client, path, workspace string, out io.Writer) (bool, error) {
+func reuse(client Client, path, workspace string, out io.Writer, teams ...Team) (bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -443,6 +454,9 @@ func reuse(client Client, path, workspace string, out io.Writer) (bool, error) {
 		leader, ok := matched[state.LeaderName]
 		if !ok {
 			return false, errors.New("startup record has no matching leader")
+		}
+		if len(teams) > 0 {
+			reportConfigChange(out, state, teams[0])
 		}
 		if err = focusReadyTeam(client, leader.Name, path, out); err != nil {
 			return false, err
@@ -522,16 +536,73 @@ The leader reads your replies through Herdr; do not interrupt the leader with co
 `
 }
 func initializePrompt(client Client, entry StartedMember, workspace, prompt string) error {
-	current, err := client.Call("agent", "get", entry.Name)
-	if err != nil {
-		return err
+	return initializePromptWithReadiness(client, entry, workspace, prompt, 30*time.Second, 250*time.Millisecond, nil)
+}
+
+// Poll only startup states: a working member may already be executing user work.
+// Prompt delivery is attempted once, even if the CLI later reports a timeout.
+func initializePromptWithReadiness(client Client, entry StartedMember, workspace, prompt string, timeout, interval time.Duration, progress func(string)) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	var agent Agent
+	timedOut := func() error {
+		return fmt.Errorf("%s readiness timed out after %s (status %s, interactive_ready %t); open its pane and check startup, login or permission prompts: %w", entry.Name, timeout, agent.Status, agent.InteractiveReady, context.DeadlineExceeded)
 	}
-	agent := current.Agent
-	if agent.Name != entry.Name || agent.PaneID != entry.PaneID || agent.TerminalID != entry.TerminalID || agent.WorkspaceID != workspace || agent.Kind != entry.Kind {
-		return fmt.Errorf("%s identity changed before initialization", entry.Name)
+	waiting := false
+	for {
+		if time.Until(deadline) <= 0 {
+			return timedOut()
+		}
+		var current Result
+		var err error
+		if contextual, ok := client.(interface {
+			CallContext(context.Context, ...string) (Result, error)
+		}); ok {
+			current, err = contextual.CallContext(ctx, "agent", "get", entry.Name)
+		} else {
+			current, err = client.Call("agent", "get", entry.Name)
+		}
+		// A readiness response arriving after the deadline must not authorize
+		// prompt delivery, even if the client ignored context cancellation.
+		if time.Until(deadline) <= 0 {
+			return errors.Join(timedOut(), err)
+		}
+		if err != nil {
+			return err
+		}
+		agent = current.Agent
+		if agent.Name != entry.Name || agent.PaneID != entry.PaneID || agent.TerminalID != entry.TerminalID || agent.WorkspaceID != workspace || agent.Kind != entry.Kind {
+			return fmt.Errorf("%s identity changed before initialization", entry.Name)
+		}
+		if (agent.Status == "idle" || agent.Status == "done") && agent.InteractiveReady {
+			break
+		}
+		if agent.Status == "blocked" {
+			return fmt.Errorf("%s needs user input before initialization; open its pane and check login or permission prompts", entry.Name)
+		}
+		switch agent.Status {
+		case "starting", "initializing", "idle", "done":
+		default:
+			return fmt.Errorf("%s is not ready for initialization (status %s, interactive_ready %t)", entry.Name, agent.Status, agent.InteractiveReady)
+		}
+		if !waiting && progress != nil {
+			progress("waiting for readiness")
+		}
+		waiting = true
+		timer := time.NewTimer(min(interval, max(time.Until(deadline), 0)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return timedOut()
+		case <-timer.C:
+		}
 	}
-	if (agent.Status != "idle" && agent.Status != "done") || !agent.InteractiveReady {
-		return fmt.Errorf("%s is not ready for initialization (status %s, interactive_ready %t)", entry.Name, agent.Status, agent.InteractiveReady)
+	if progress != nil {
+		progress("initializing role")
+	}
+	if time.Until(deadline) <= 0 {
+		return timedOut()
 	}
 	// get and prompt are separate CLI calls. An external caller can still race
 	// this check; --wait observes lifecycle states, not a uniquely identified turn.
@@ -540,12 +611,16 @@ func initializePrompt(client Client, entry StartedMember, workspace, prompt stri
 		return err // Delivery may be uncertain: never resend automatically.
 	}
 	if result.Agent.Status != "idle" && result.Agent.Status != "done" {
-		return fmt.Errorf("%s needs user input during initialization", entry.Name)
+		return fmt.Errorf("%s needs user input during initialization; open its pane and check login or permission prompts", entry.Name)
 	}
 	return nil
 }
 
-func initializeMembers(team Team, state *Startup, path string, client Client) error {
+func initializeMembers(team Team, state *Startup, path string, client Client, outputs ...io.Writer) error {
+	out := io.Discard
+	if len(outputs) > 0 && outputs[0] != nil {
+		out = outputs[0]
+	}
 	type task struct {
 		index  int
 		entry  StartedMember
@@ -553,6 +628,8 @@ func initializeMembers(team Team, state *Startup, path string, client Client) er
 	}
 	type completion struct {
 		index int
+		stage string
+		done  bool
 		err   error
 	}
 	var tasks []task
@@ -574,19 +651,29 @@ func initializeMembers(team Team, state *Startup, path string, client Client) er
 			job := tasks[next]
 			next++
 			active++
+			fmt.Fprintf(out, "%s: checking readiness…\n", job.entry.Name)
 			go func() {
-				results <- completion{job.index, initializePrompt(client, job.entry, workspace, job.prompt)}
+				err := initializePromptWithReadiness(client, job.entry, workspace, job.prompt, 30*time.Second, 250*time.Millisecond, func(stage string) {
+					results <- completion{index: job.index, stage: stage}
+				})
+				results <- completion{index: job.index, done: true, err: err}
 			}()
 		}
 		if active == 0 {
 			break
 		}
 		result := <-results
+		if !result.done {
+			fmt.Fprintf(out, "%s: %s…\n", state.Members[result.index].Name, result.stage)
+			continue
+		}
 		active--
 		if result.err != nil {
+			fmt.Fprintf(out, "%s: initialization failed: %v\n", state.Members[result.index].Name, result.err)
 			failure = errors.Join(failure, fmt.Errorf("initializing %s: %w", state.Members[result.index].Name, result.err))
 			continue
 		}
+		fmt.Fprintf(out, "%s: initialized\n", state.Members[result.index].Name)
 		// Only this coordinator mutates state and writes records, including when
 		// draining in-flight results after a failure. Unsent tasks stay untouched.
 		state.Members[result.index].Initialized = true
@@ -597,25 +684,29 @@ func initializeMembers(team Team, state *Startup, path string, client Client) er
 	if failure != nil {
 		return failure
 	}
-	if err := initializePrompt(client, leader.entry, workspace, leader.prompt); err != nil {
+	fmt.Fprintf(out, "%s: checking readiness…\n", leader.entry.Name)
+	if err := initializePromptWithReadiness(client, leader.entry, workspace, leader.prompt, 30*time.Second, 250*time.Millisecond, func(stage string) {
+		fmt.Fprintf(out, "%s: %s…\n", leader.entry.Name, stage)
+	}); err != nil {
+		fmt.Fprintf(out, "%s: initialization failed: %v\n", leader.entry.Name, err)
 		return err
 	}
+	fmt.Fprintf(out, "%s: initialized\n", leader.entry.Name)
 	state.Members[leader.index].Initialized = true
 	return save(path, *state)
 }
 
 func initialize(team Team, project, workspace, stateDir string, env map[string]string, client Client, out io.Writer) (err error) {
-	digest := sha256.Sum256([]byte(strings.Join([]string{env["HERDR_SOCKET_PATH"], env["HERDR_SESSION"], workspace, project}, "\x00")))
 	if err = os.MkdirAll(stateDir, 0700); err != nil {
 		return err
 	}
-	path := filepath.Join(stateDir, hex.EncodeToString(digest[:12])+".json")
+	path := startupPath(stateDir, project, workspace, env)
 	unlock, err := lock(path + ".lock")
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	reused, err := reuse(client, path, workspace, out)
+	reused, err := reuse(client, path, workspace, out, team)
 	if err != nil || reused {
 		return err
 	}
@@ -627,7 +718,7 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 		return err
 	}
 	prefix := "t" + hex.EncodeToString(nonce[:])
-	state := Startup{Project: project, WorkspaceID: workspace, Status: "starting", LeaderName: prefix + "-" + team.Leader}
+	state := Startup{Project: project, WorkspaceID: workspace, Status: "starting", Stage: "creating panes", ConfigDigest: teamDigest(team), LeaderName: prefix + "-" + team.Leader}
 	if err = save(path, state); err != nil {
 		return err
 	}
@@ -673,23 +764,32 @@ func initialize(team Team, project, workspace, stateDir string, env map[string]s
 			return err
 		}
 	}
+	state.Stage = "starting agents"
+	if err = save(path, state); err != nil {
+		return err
+	}
 	for i, member := range team.Members {
 		entry := &state.Members[i]
 		fmt.Fprintf(out, "Starting %s (%s)…\n", entry.Name, member.Kind)
 		args := []string{"agent", "start", entry.Name, "--kind", member.Kind, "--pane", entry.PaneID, "--"}
 		args = append(args, member.Args...)
 		if _, err = client.Call(args...); err != nil {
-			return err
+			return fmt.Errorf("starting %s (%s) in pane %s failed: %w; open that pane and check login, permissions and CLI startup; launch delivery may be uncertain, so no automatic restart was attempted", entry.Name, member.Kind, entry.PaneID, err)
 		}
 		entry.Started = true
 		if err = save(path, state); err != nil {
 			return err
 		}
 	}
-	if err = initializeMembers(team, &state, path, client); err != nil {
+	state.Stage = "initializing roles"
+	if err = save(path, state); err != nil {
+		return err
+	}
+	if err = initializeMembers(team, &state, path, client, out); err != nil {
 		return err
 	}
 	state.Status = "ready"
+	state.Stage = "ready"
 	if err = save(path, state); err != nil {
 		return err
 	}
@@ -704,6 +804,7 @@ func run(args []string, entries []string, out io.Writer) error {
 	flags := flag.NewFlagSet("herdr-team", flag.ContinueOnError)
 	flags.SetOutput(out)
 	projectFlag := flags.String("project", "", "override the current project directory")
+	status := flags.Bool("status", false, "show recorded team startup and current member status without changing agents")
 	check := flags.Bool("check", false, "validate team files only; use current project context inside Herdr")
 	initTeam := flags.Bool("init", false, "create .team from a template; do not start agents")
 	listTemplates := flags.Bool("list-templates", false, "list built-in and configured templates offline")
@@ -716,13 +817,13 @@ func run(args []string, entries []string, out io.Writer) error {
 		return errors.New("unexpected positional arguments")
 	}
 	modes := 0
-	for _, enabled := range []bool{*check, *initTeam, *listTemplates} {
+	for _, enabled := range []bool{*check, *initTeam, *listTemplates, *status} {
 		if enabled {
 			modes++
 		}
 	}
 	if modes > 1 {
-		return errors.New("--init, --check and --list-templates are mutually exclusive")
+		return errors.New("--init, --check, --list-templates and --status are mutually exclusive")
 	}
 	var templateOption, directoryOption bool
 	flags.Visit(func(f *flag.Flag) {
@@ -789,7 +890,7 @@ func run(args []string, entries []string, out io.Writer) error {
 		return nil
 	}
 	if env["HERDR_ENV"] != "1" {
-		return errors.New("not running inside Herdr; invoke start-team from a Herdr project")
+		return errors.New("not running inside Herdr; invoke start-team or status-team from a Herdr project")
 	}
 	binary := env["HERDR_BIN_PATH"]
 	if binary == "" {
@@ -800,18 +901,16 @@ func run(args []string, entries []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	team, err := loadTeam(project)
+	stateDir, err := startupDirectory(env)
 	if err != nil {
 		return err
 	}
-	stateDir := env["HERDR_PLUGIN_STATE_DIR"]
-	if stateDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		// Keep the historical default directory when renaming the CLI.
-		stateDir = filepath.Join(home, ".local", "state", "herdr-agent-team")
+	if *status {
+		return reportStatus(client, startupPath(stateDir, project, workspace, env), project, workspace, out)
+	}
+	team, err := loadTeam(project)
+	if err != nil {
+		return err
 	}
 	return initialize(team, project, workspace, stateDir, env, client, out)
 }

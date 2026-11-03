@@ -55,17 +55,19 @@ kind 和 args 是交给 Herdr 的启动配置。示例中的 codex 可以替换�
 
 ## 团队启动
 
-插件 ID 为 `local.herdr-team`，提供 `init-team` 和 `start-team` actions，分别生成 `.team` 和启动团队；启动通过 `herdr plugin action invoke local.herdr-team.start-team` 调用。Go module 和 CLI 名称为 `herdr-team`，二进制为 `bin/herdr-team`。
+插件 ID 为 `herdr-team`，提供初始化、启动、模板列表、配置检查和状态查询 actions；启动通过 `herdr plugin action invoke herdr-team.start-team` 调用，状态查询使用 `herdr-team.status-team`。Go module 和 CLI 名称为 `herdr-team`，二进制为 `bin/herdr-team`。
 
 1. 从 Herdr 当前项目上下文取得项目目录，读取 `.team/team.md`。
 2. 检查成员定义、Leader 引用和本机 Herdr 支持的 kind；启动程序可用性由 Herdr 启动接口检查。
 3. 在当前项目的团队 tab 中创建成员 panes，全部使用当前项目目录，通过 `herdr agent start` 启动成员。
-4. 检查普通成员的身份、idle/done 状态与交互就绪情况，最多并行向 4 个成员发送团队规则、成员角色、成员名单、实际 Herdr 名称和共享工作区路径。由协调流程逐成员保存结果；失败时收集已派出的其他成员结果。
+4. 检查普通成员的身份、idle/done 状态与交互就绪情况。启动中或 idle/done 但暂不可交互的成员，每 250ms 重查，最多等待 30 秒；working、blocked、unknown 或身份变化立即拒绝。最多并行向 4 个成员发送团队规则、成员角色、成员名单、实际 Herdr 名称和共享工作区路径，输出逐成员进度。由协调流程逐成员保存结果；失败时收集已派出的其他成员结果。
 5. 全部普通成员成功后，同样检查 Leader 并发送包含额外协调说明的初始化提示。保存团队就绪状态，最后聚焦 Leader pane；聚焦失败保留就绪状态，允许下次启动重试聚焦。初始化程序退出。
 
 Agent 的 Herdr 唯一名称带短团队实例前缀，避免不同项目同名；pane 名称设置为成员 ID（如 `leader`），pane ID 使用 Herdr 创建接口返回值。启动记录和 Herdr 协作命令仍使用 Agent 的完整名称（如 `t255aaa28-leader`）。初始化提示同时包含 Herdr 的协作命令说明。
 
 Herdr 的 `prompt --wait` 不跟踪具体回合；提交前状态检查可以拒绝正在工作的成员，但不能消除检查与提交之间的外部输入竞态。初始化期间不应向成员另发指令。CLI 失败诊断保留结构化错误、stderr 和超时原因，命令上下文只包含命令和目标，不附加角色提示正文或启动参数。
+
+Herdr 的 `agent start` 自身会等待交互就绪；插件的后置检查处理就绪状态短暂波动，不会重试启动或提示投递。Agent kind 从 `agent start --help` 的 `--kind` 选项段发现，支持换行、ANSI 和 CRLF，解析失败时提供客户端版本及排查命令，不猜测支持的类型。
 
 初始化无需输入开发目标，团队就绪后直接在 Leader pane 中输入目标。插件不创建 worktree 或分支，所有成员使用当前项目已有的 worktree，包括其中已有的工作内容。
 
@@ -101,8 +103,10 @@ herdr agent read <成员名称> --lines 120
 
 保留一份小的启动结果文件，记录项目目录、本次创建的成员名称和 pane，便于部分启动失败时说明已启动的成员。重复初始化发现当前项目已有存活团队时，聚焦已有 Leader，避免再次启动。
 
+启动记录还保存有效团队配置的 SHA-256 摘要、最后启动阶段和错误。复用时比较角色正文、团队规则、kind 和 args 等有效配置，变更仅提示，不自动更新正在运行的团队。旧记录没有摘要时明确提示无法比较。`--status` 在当前 Herdr 上下文中只读查询记录、Agent 和 pane；即使当前配置损坏仍可诊断已有团队，不创建、聚焦或关闭窗格，也不发送提示。
+
 状态目录优先使用 `HERDR_PLUGIN_STATE_DIR`；未设置时保留历史兼容路径 `~/.local/state/herdr-agent-team`，避免仅 CLI 改名改变默认路径。插件 ID 或项目目录变化仍可能改变状态目录或记录键，不能保证识别旧团队；不自动迁移记录，再次启动前应检查并关闭旧团队。
 
 不实现后台控制器、任务数据库、消息队列、自定义通信协议、管理面板或自动恢复。第一版仅要求固定成员启动成功，并能在 Leader 的指挥下协作完成一次开发任务。
 
-依据：本机 Herdr 0.9.3 的 CLI 帮助，以及[插件文档](https://herdr.dev/docs/plugins/)和[Agent 自动化文档](https://herdr.dev/docs/agent-automation/)。使用 Go 实现并编译为独立可执行文件，入口为 `main.go`，安装和使用见 README.md。尚未在真实 Herdr 会话中启动团队。
+初始依据为本机 Herdr 0.9.3 的 CLI 帮助，以及[插件文档](https://herdr.dev/docs/plugins/)和[Agent 自动化文档](https://herdr.dev/docs/agent-automation/)；兼容性解析已对照本机 Herdr 0.9.5 帮助验证。使用 Go 实现并编译为独立可执行文件，入口为 `main.go`，安装和使用见 README.md。真实环境验证步骤与范围见 [验证与故障排查](docs/verification.md)。

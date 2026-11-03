@@ -37,3 +37,9 @@ id = "check-team"
 title = "Check project Herdr Team configuration"
 contexts = ["workspace"]
 command = ["bin/herdr-team", "--check"]
+
+[[actions]]
+id = "status-team"
+title = "Show project Herdr Team status"
+contexts = ["workspace"]
+command = ["bin/herdr-team", "--status"]

@@ -567,7 +567,6 @@ func TestInitializationRejectsUnsafeAgentBeforePrompt(t *testing.T) {
 		{"busy", func(a Agent) Agent { a.Status = "working"; return a }},
 		{"blocked", func(a Agent) Agent { a.Status = "blocked"; return a }},
 		{"unknown", func(a Agent) Agent { a.Status = "unknown"; return a }},
-		{"not ready", func(a Agent) Agent { a.InteractiveReady = false; return a }},
 		{"name replaced", func(a Agent) Agent { a.Name = "replacement"; return a }},
 		{"pane replaced", func(a Agent) Agent { a.PaneID = "w1:p99"; return a }},
 		{"terminal replaced", func(a Agent) Agent { a.TerminalID = "other"; return a }},

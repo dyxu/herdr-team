@@ -2,6 +2,18 @@
 
 实现模板初始化 `.team`、在当前 Herdr 项目中按团队定义启动多个 Agent，以及由 Leader 通过 Herdr 协调成员完成开发任务。
 
+## herdr-core 后端
+
+`--backend core` 以官方 0.1.21 发布的 OpenRPC schema 为接口基准，通过 `herdr-core connect` 的 plain 模式交换逐行 JSON-RPC 2.0 请求与响应。校验响应版本、请求 ID 和结构化错误，不解析 CLI `run/ls` 的简略记录。`terminal.run/list/get` 返回完整终端结构，包含对象形式的 status 和 labels。默认自动选择：旧版 `HERDR_ENV=1` 使用 Herdr，否则使用 core。core 以当前目录或 `--project` 作为项目，无需工作区上下文；状态文件以 `server.status` 返回的永久 core ID 和项目路径隔离，不受调用终端变化影响。
+
+启动前保存所有计划成员名，通过 `terminal.run` 的 `wait=false`、`no_parent=true`、`no_notify=true` 创建独立持久终端，并标记团队标签；Codex 添加 `--no-daemon`。使用 `terminal.wait` 等待 idle/done，再通过 `terminal.get` 核验终端地址、名称、目录和标签。就绪预算为 30 秒。
+
+角色提示通过 `terminal.send` 发送一次，然后通过 `terminal.wait` 等待本轮结束。所有 send/wait 使用稳定 caller（当前 `HC_TERMINAL_ID`，否则 `ppid:<插件进程 ID>`），保证跨 connect 子进程仍跟踪相同发送轮次。message 和 timeout 是等待被打断或检查点，继续等待，不重发；发送后的总等待预算为 120 秒。即使 send 返回 started=false，也通过 wait 跟踪其后续处理，不将旧的 idle 状态当作完成。最终必须收到已结束的 idle/done status 结果。先初始化普通成员，再初始化 Leader，最终输出 attach 命令。
+
+发布 schema 的 send.if 仅接受 idle/working，因此 idle 使用 `if=idle`，done 不发送非法条件值；两种情况下均保持 force=false，core 会拒绝向 blocked 对话框输入。done 的状态检查与发送不是原子的，初始化期间不应向成员另发指令。
+
+重复启动仅复用身份匹配的完整 ready 团队。启动响应丢失时可通过预先保存的名称和团队标签发现未记录地址的终端，阻止重复启动。部分失败保留终端与记录，不自动重发、不自动关闭。core 角色提示使用 get/send/wait/read，名单包含不可复用的终端地址，成员通过 send 向 Leader 地址汇报。状态查询只读取记录和终端状态，不发送消息或切换终端。旧版 Herdr 插件的标签页、窗格流程保持独立。官方 schema 快照存于 `testdata/herdr-core/`，用于独立校验测试中的实际 API 参数。
+
 ## 团队定义
 
 ```text

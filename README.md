@@ -13,7 +13,30 @@
 
 ## 安装
 
-支持 macOS 和 Linux。需要 Herdr 0.9.3+、Git、Go 1.23+，以及已安装并登录的 Agent CLI（模板默认使用 Codex）。
+支持 macOS 和 Linux。需要 Go 1.23+，以及已安装并登录的 Agent CLI（模板默认使用 Codex）。运行环境可选择 **herdr-core**（以官方 0.1.21 发布的 OpenRPC 接口为基准）或旧版 **Herdr 0.9.3+** 插件。
+
+### 使用 herdr-core
+
+克隆本仓库后构建，可从普通终端或 core 终端启动，无需旧版 Herdr 插件和工作区上下文：
+
+```sh
+go build -o bin/herdr-team .
+bin/herdr-team --init --template minimal --project /absolute/project/path
+bin/herdr-team --backend core --project /absolute/project/path
+bin/herdr-team --backend core --status --project /absolute/project/path
+```
+
+启动完成后，执行输出中的 `herdr-core attach <leader-name>` 与 Leader 对话。core 后端创建持久终端，不创建标签页或窗格，也不自动切换当前终端。成员的 `kind` 是 core 运行环境 PATH 中的交互式 Agent 命令，`args` 作为启动参数传入；Codex 自动添加 `--no-daemon`。Agent 必须报告 OSC 7501 状态，启动后进入 `idle` 或 `done`，才能发送角色提示。不要配置一次性执行或退出模式。
+
+底层通过 `herdr-core connect` 使用[官方 JSON-RPC API](https://github.com/herdrdev/herdr-core/blob/master/schema/README.md)，读取完整终端身份、状态和标签。角色提示发送一次，随后使用固定 caller 身份等待本轮处理；收到消息或等待超时检查点时继续等待，总就绪预算为 30 秒、发送后的等待预算为 120 秒。成员协作使用启动时返回的终端地址，避免名称复用后发送到其他终端。
+
+`--backend auto` 为默认值：`HERDR_ENV=1` 时使用旧版 Herdr，否则使用 core；可显式指定 `--backend core` 或 `--backend herdr`。core 默认调用 `herdr-core`，可通过 `HERDR_CORE_BIN_PATH` 指定绝对路径（包括名为 `hc` 的安装）。省略 `--project` 时使用当前目录；`--init`、`--check`、`--list-templates` 仍支持离线使用。
+
+团队状态按 core 的永久身份和项目路径隔离，重启 core 后仍可复用已启动的团队。再次启动不会重发角色提示；配置变更会提示旧团队仍使用原配置。部分启动失败时保留终端与记录，通过 `--status` 和 `herdr-core get/read <name>` 排查，只关闭该团队的终端后再重新启动。core 不会自动回答登录或权限提示。
+
+### 使用旧版 Herdr 插件
+
+额外需要 Git 和 Herdr 0.9.3+。
 
 在任意目录执行：
 

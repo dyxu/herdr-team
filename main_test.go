@@ -442,7 +442,7 @@ func TestProjectContext(t *testing.T) {
 }
 func TestOutsideHerdrAndOfflineCheck(t *testing.T) {
 	project, _, _ := fixture(t)
-	if err := run([]string{"--project", project}, nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not running inside Herdr") {
+	if err := run([]string{"--backend", "herdr", "--project", project}, nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not running inside Herdr") {
 		t.Fatal(err)
 	}
 	if err := run([]string{"--check", "--project", project}, nil, &bytes.Buffer{}); err != nil {

@@ -804,6 +804,7 @@ func run(args []string, entries []string, out io.Writer) error {
 	flags := flag.NewFlagSet("herdr-team", flag.ContinueOnError)
 	flags.SetOutput(out)
 	projectFlag := flags.String("project", "", "override the current project directory")
+	backend := flags.String("backend", "auto", "runtime: auto, herdr or core (herdr-core)")
 	status := flags.Bool("status", false, "show recorded team startup and current member status without changing agents")
 	check := flags.Bool("check", false, "validate team files only; use current project context inside Herdr")
 	initTeam := flags.Bool("init", false, "create .team from a template; do not start agents")
@@ -841,6 +842,10 @@ func run(args []string, entries []string, out io.Writer) error {
 		return errors.New("--templates-dir requires --init or --list-templates")
 	}
 	env := envMap(entries)
+	if *backend != "auto" && *backend != "herdr" && *backend != "core" {
+		return errors.New("--backend must be auto, herdr or core")
+	}
+	useCore := *backend == "core" || (*backend == "auto" && env["HERDR_ENV"] != "1")
 	directory := env["HERDR_TEAM_TEMPLATES_DIR"]
 	if directoryOption {
 		directory = *templatesDir
@@ -857,7 +862,7 @@ func run(args []string, entries []string, out io.Writer) error {
 	}
 	if *initTeam || *check {
 		path := *projectFlag
-		if path == "" && env["HERDR_ENV"] == "1" {
+		if path == "" && !useCore && env["HERDR_ENV"] == "1" {
 			binary := env["HERDR_BIN_PATH"]
 			if binary == "" {
 				binary = "herdr"
@@ -888,6 +893,9 @@ func run(args []string, entries []string, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "Created %s from template %s. Edit team.md and members/*.md to configure roles, kind and args.\n", filepath.Join(project, ".team"), *template)
 		return nil
+	}
+	if useCore {
+		return runCore(*projectFlag, *status, entries, out)
 	}
 	if env["HERDR_ENV"] != "1" {
 		return errors.New("not running inside Herdr; invoke start-team or status-team from a Herdr project")

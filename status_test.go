@@ -145,7 +145,7 @@ func TestStatusCLIContextAndConflicts(t *testing.T) {
 			t.Fatal("conflict accepted", args)
 		}
 	}
-	if err := run([]string{"--status", "--project", project}, nil, &bytes.Buffer{}); err == nil {
+	if err := run([]string{"--backend", "herdr", "--status", "--project", project}, nil, &bytes.Buffer{}); err == nil {
 		t.Fatal("status without session accepted")
 	}
 }

@@ -10,6 +10,33 @@ go build -o bin/herdr-team .
 
 GitHub Actions 在 macOS 和 Linux 上执行以上检查，并验证编译后二进制能列出模板、初始化和检查团队。CI 不启动真实 Agent，不需要厂商凭据。
 
+## herdr-core 验证
+
+自动测试通过独立 connect 子进程模拟官方 JSON-RPC 请求与完整 API 响应，并用仓库内保存的官方 0.1.21 发布 schema 校验实际请求参数。覆盖 idle/done 初始化、角色指令、Codex 参数、稳定 caller、状态查询、重复复用、配置变更、消息打断和 timeout 检查点后继续等待，以及 blocked、启动响应丢失和发送失败后不重复启动或发送。send 返回 started=false 时仍等待同一轮处理。另覆盖错误响应、非法版本/ID、CLI 简略记录误入和总等待预算。旧版 Herdr 测试继续运行。
+
+真实 core 回归脚本不依赖 Agent 或厂商凭据：
+
+```sh
+go build -o bin/herdr-team .
+python3 scripts/verify-core.py --core /absolute/path/to/herdr-core
+```
+
+脚本使用独立 socket、`HC_SESSION` 和临时 XDG 目录，运行报告 OSC 7501 状态的交互式 Python 测试程序。验证双成员团队在 idle/done 状态下初始化、角色提示各发送一次、状态查询和重复复用；通过向测试 caller 终端发送消息，验证真实 message 打断后继续等待且不重发。结束时清理本次创建的终端与 core。2026-11-13 在 macOS、herdr-core 0.1.21 上全部通过；此验证未启动真实 Agent。
+
+已安装并登录交互式 Agent 后，可在独立测试项目中手动运行（会启动真实 Agent）：
+
+```sh
+plugin="$PWD/bin/herdr-team"
+test_project="$(mktemp -d)"
+test_state="$(mktemp -d)"
+"$plugin" --init --template minimal --project "$test_project"
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --status --project "$test_project"
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
+```
+
+检查重复启动未新增终端或重发角色提示，按输出的 attach 命令进入 Leader。失败时用 `herdr-core get/read <name>` 检查，不自动处理授权，不盲目重发。结束后只对测试记录中的终端执行 kill/rm；不要停止或重启用户的 core。
+
 ## 真实 Herdr 验证
 
 已登录 Agent 后，可在 Herdr 窗格中运行显式启用的集成测试：

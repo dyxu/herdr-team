@@ -12,7 +12,7 @@ GitHub Actions 在 macOS 和 Linux 上执行以上检查，并验证编译后二
 
 ## herdr-core 验证
 
-自动测试通过独立 connect 子进程模拟官方 JSON-RPC 请求与完整 API 响应，并用仓库内保存的官方 0.1.21 发布 schema 校验实际请求参数。覆盖 idle/done 初始化、角色指令、Codex 参数、稳定 caller、状态查询、重复复用、配置变更、消息打断和 timeout 检查点后继续等待，以及 blocked、启动响应丢失和发送失败后不重复启动或发送。send 返回 started=false 时仍等待同一轮处理。另覆盖错误响应、非法版本/ID、CLI 简略记录误入和总等待预算。旧版 Herdr 测试继续运行。
+自动测试通过独立 connect 子进程模拟官方 JSON-RPC 请求与完整 API 响应，并用仓库内保存的官方 0.1.21 发布 schema 校验实际请求参数。覆盖 idle/done 初始化、角色指令、Codex 参数、稳定 caller、状态查询、重复复用、配置变更、消息打断和 timeout 检查点后继续等待，启动 settle 拒绝后的安全重试、重试前 blocked/身份变化、重试预算，以及 blocked、启动响应丢失和发送失败后不重复启动或发送。send 返回 started=false 时仍等待同一轮处理。另覆盖错误响应、非法版本/ID、CLI 简略记录误入和总等待预算。初始化提示另验证所有角色在本轮禁止工具调用、发送就绪消息与执行 wait；模拟送达后 blocked:permission，检查 attach 诊断且无重发或 force。旧版 Herdr 测试继续运行。
 
 真实 core 回归脚本不依赖 Agent 或厂商凭据：
 
@@ -21,7 +21,9 @@ go build -o bin/herdr-team .
 python3 scripts/verify-core.py --core /absolute/path/to/herdr-core
 ```
 
-脚本使用独立 socket、`HC_SESSION` 和临时 XDG 目录，运行报告 OSC 7501 状态的交互式 Python 测试程序。验证双成员团队在 idle/done 状态下初始化、角色提示各发送一次、状态查询和重复复用；通过向测试 caller 终端发送消息，验证真实 message 打断后继续等待且不重发。结束时清理本次创建的终端与 core。2026-11-13 在 macOS、herdr-core 0.1.21 上全部通过；此验证未启动真实 Agent。
+脚本使用独立 socket、`HC_SESSION` 和临时 XDG 目录，运行报告 OSC 7501 状态的交互式 Python 测试程序。验证双成员团队在 idle/done 状态下初始化、角色提示各发送一次、状态查询和重复复用；通过先报告 idle、再持续输出 6.5 秒的 fixture 复现 core 的 5 秒 settle 拒绝，验证自动重试后每个角色只实际收到一次；通过向测试 caller 终端发送消息，验证真实 message 打断后继续等待且不重发。另模拟提示送达后报告 blocked:permission，确认状态为 partial、错误包含原因和 attach 指引、状态查询不会回答弹窗。结束时清理本次创建的终端与 core。2026-11-13 在 macOS、herdr-core 0.1.21 上全部通过；此验证未启动真实 Agent。
+
+2026-11-13 另在本仓库的真实 `.team/` 配置下，以独立临时状态目录运行 `bin/herdr-team --backend core`，使用本机 herdr-core 0.1.21 和 Codex 0.169.0 启动 Leader、Developer、Reviewer。三个成员均完成初始化，分别只回复 `leader ready.`、`developer ready.`、`reviewer ready.`；读取画面未见额外工具调用或权限弹窗。Developer 的启动 settle 拒绝自动重试成功。随后 `--status` 和重复启动均通过，三个终端的地址与 turn=2 保持一致，没有新增成员或重发角色提示。本次仅验证启动、初始化、状态和复用，未分派实际开发任务。原失败团队保持不动，本次测试团队验证后单独清理。
 
 已安装并登录交互式 Agent 后，可在独立测试项目中手动运行（会启动真实 Agent）：
 

@@ -13,6 +13,29 @@ import (
 	"time"
 )
 
+// Preserve the server's error fields so retry decisions never depend on a
+// transport error string or an arbitrary occurrence of "unavailable".
+type coreRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Kind string `json:"kind"`
+		Hint string `json:"hint"`
+	} `json:"data"`
+}
+
+func (e *coreRPCError) Error() string {
+	return fmt.Sprintf("RPC %d %s: %s; %s", e.Code, e.Data.Kind, e.Message, e.Data.Hint)
+}
+
+func startupSendWasNotTyped(err error, terminal string) bool {
+	var rpc *coreRPCError
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
+		errors.As(err, &rpc) && rpc.Code == -32000 && rpc.Data.Kind == "unavailable" &&
+		rpc.Message == terminal+" is still starting: its output has not settled" &&
+		rpc.Data.Hint == "nothing was typed; check hc read "+terminal+", then retry"
+}
+
 // Plain-mode JSON-RPC over the officially supported stdio transport. Keep
 // stdin open until the response arrives: closing it early closes the connection.
 // CLI run/ls output is deliberately abbreviated and is not the OpenRPC result.
@@ -81,14 +104,7 @@ func (c *Core) call(ctx context.Context, result any, method string, params any) 
 			ID      json.RawMessage `json:"id"`
 			Method  string          `json:"method"`
 			Result  json.RawMessage `json:"result"`
-			Error   *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-				Data    struct {
-					Kind string `json:"kind"`
-					Hint string `json:"hint"`
-				} `json:"data"`
-			} `json:"error"`
+			Error   *coreRPCError   `json:"error"`
 		}
 		if err = decoder.Decode(&response); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -106,8 +122,7 @@ func (c *Core) call(ctx context.Context, result any, method string, params any) 
 			return errors.New("unexpected JSON-RPC response ID")
 		}
 		if response.Error != nil {
-			e := response.Error
-			return fmt.Errorf("RPC %d %s: %s; %s", e.Code, e.Data.Kind, e.Message, e.Data.Hint)
+			return response.Error
 		}
 		if len(response.Result) == 0 || bytes.Equal(bytes.TrimSpace(response.Result), []byte("null")) {
 			return errors.New("JSON-RPC response is missing result")
@@ -164,6 +179,9 @@ func (c *Core) waitSettled(ctx context.Context, terminal string, out io.Writer) 
 			if result.Ended && (result.Status == "idle" || result.Status == "done") {
 				return nil
 			}
+			if result.Status == "blocked" {
+				return c.blockedError(ctx, terminal)
+			}
 			return fmt.Errorf("%s did not settle (status %s); inspect get/read for login, permission or agent errors", terminal, result.Status)
 		default:
 			return fmt.Errorf("%s wait ended with %s (status %s); inspect get/read before retrying", terminal, result.Reason, result.Status)
@@ -171,32 +189,63 @@ func (c *Core) waitSettled(ctx context.Context, terminal string, out io.Writer) 
 	}
 }
 
-func (c *Core) initializeRole(entry StartedMember, project, token, prompt string, out io.Writer) error {
-	readyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := c.waitSettled(readyCtx, entry.TerminalID, out)
-	cancel()
-	if err != nil {
-		return err
-	}
+func (c *Core) blockedError(ctx context.Context, terminal string) error {
 	var current coreTerminal
-	if err = c.call(context.Background(), &current, "terminal.get", map[string]any{"terminal": entry.TerminalID}); err != nil {
-		return err
+	err := c.call(ctx, &current, "terminal.get", map[string]any{"terminal": terminal})
+	reason := "blocked"
+	if current.Address == terminal && current.Status != nil && current.Status.Kind != "" {
+		reason += ": " + current.Status.Kind
 	}
-	if !coreMatches(current, entry, project, token) || current.State != "live" || (current.status() != "idle" && current.status() != "done") {
-		return fmt.Errorf("%s is not settled or its identity changed (status %s); inspect get/read before retrying", entry.Name, current.status())
-	}
-	params := map[string]any{"terminal": entry.TerminalID, "caller": c.caller(), "text": prompt, "force": false, "wait": false}
-	// The published schema only accepts idle/working for `if`; done is a valid
-	// settled status but is not a legal value for this optional condition.
-	if current.status() == "idle" {
-		params["if"] = "idle"
-	}
+	diagnostic := fmt.Errorf("%s needs user input (%s); open %s attach %s and handle the prompt manually; no automatic approval or role resend was attempted", terminal, reason, shellQuote(c.Bin), shellQuote(terminal))
+	return errors.Join(diagnostic, err)
+}
+
+func (c *Core) initializeRole(entry StartedMember, project, token, prompt string, out io.Writer) error {
+	return c.initializeRoleWithBudget(entry, project, token, prompt, out, 60*time.Second)
+}
+
+func (c *Core) initializeRoleWithBudget(entry StartedMember, project, token, prompt string, out io.Writer, startupBudget time.Duration) error {
+	readyCtx, cancel := context.WithTimeout(context.Background(), startupBudget)
+	defer cancel()
 	var sent struct {
 		Turn *uint64 `json:"turn"`
 	}
-	if err = c.call(context.Background(), &sent, "terminal.send", params); err != nil {
-		return err
+	for {
+		if err := c.waitSettled(readyCtx, entry.TerminalID, out); err != nil {
+			return err
+		}
+		var current coreTerminal
+		if err := c.call(readyCtx, &current, "terminal.get", map[string]any{"terminal": entry.TerminalID}); err != nil {
+			return err
+		}
+		if !coreMatches(current, entry, project, token) || current.State != "live" || (current.status() != "idle" && current.status() != "done") {
+			return fmt.Errorf("%s is not settled or its identity changed (status %s); inspect get/read before retrying", entry.Name, current.status())
+		}
+		params := map[string]any{"terminal": entry.TerminalID, "caller": c.caller(), "text": prompt, "force": false, "wait": false}
+		// The published schema only accepts idle/working for `if`; done is a
+		// settled status but is not a legal value for this optional condition.
+		if current.status() == "idle" {
+			params["if"] = "idle"
+		}
+		err := c.call(readyCtx, &sent, "terminal.send", params)
+		if err == nil {
+			break
+		}
+		if !startupSendWasNotTyped(err, entry.TerminalID) {
+			return err
+		}
+		fmt.Fprintf(out, "%s: startup output is still settling; nothing was typed, retrying…\n", entry.Name)
+		// Match core's own first_message retry: this specific settle rejection
+		// occurs before any paste. This is RPC retry backoff, not status polling.
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-readyCtx.Done():
+			timer.Stop()
+			return errors.Join(err, readyCtx.Err())
+		case <-timer.C:
+		}
 	}
+	cancel()
 	if sent.Turn == nil {
 		return errors.New("terminal.send response is missing turn; delivery may have occurred")
 	}
@@ -204,7 +253,7 @@ func (c *Core) initializeRole(entry StartedMember, project, token, prompt string
 	defer cancel()
 	// Plain terminal.wait with the same caller follows exactly this send even
 	// when send reports started:false. Never send again to recover a wait.
-	if err = c.waitSettled(turnCtx, entry.TerminalID, out); err != nil {
+	if err := c.waitSettled(turnCtx, entry.TerminalID, out); err != nil {
 		return fmt.Errorf("role initialization: %w; delivery may have occurred", err)
 	}
 	return nil

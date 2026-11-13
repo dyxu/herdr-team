@@ -15,15 +15,18 @@ import (
 // Core uses the published OpenRPC API over hc connect (plain JSON-RPC).
 // Terminals have no workspace, tab or pane.
 type Core struct{ Herdr }
+type coreProgramStatus struct {
+	State string `json:"state"`
+	Kind  string `json:"kind,omitempty"`
+	Msg   string `json:"msg,omitempty"`
+}
 type coreTerminal struct {
-	Address string            `json:"address"`
-	Name    string            `json:"name"`
-	Cwd     string            `json:"cwd"`
-	State   string            `json:"state"`
-	Labels  map[string]string `json:"labels"`
-	Status  *struct {
-		State string `json:"state"`
-	} `json:"status"`
+	Address string             `json:"address"`
+	Name    string             `json:"name"`
+	Cwd     string             `json:"cwd"`
+	State   string             `json:"state"`
+	Labels  map[string]string  `json:"labels"`
+	Status  *coreProgramStatus `json:"status"`
 }
 
 func (t coreTerminal) status() string {
@@ -57,6 +60,9 @@ func corePrompt(team Team, member Member, state Startup, binary string) string {
 	}
 	cli := shellQuote(binary)
 	prompt := fmt.Sprintf(`You are member %s of team %s.
+This message installs your role only; it does not assign a task.
+INITIALIZATION: Do not call tools, run commands, inspect files, send messages, or invoke any wait command.
+"Wait for a task" means end your reply and leave the conversation idle, not execute herdr-core wait.
 Shared project: %s
 Leader: %s
 Team roster (target these exact terminal addresses, not reusable names):
@@ -68,7 +74,7 @@ Your role:
 All members share one worktree. Preserve existing changes. Only edit assigned files.
 Coordinate overlapping edits and Git operations through the leader. Do not create worktrees.
 Use herdr-core, not the legacy Herdr agent/pane commands. Never target terminals outside this roster.
-Commands:
+Commands for future assigned tasks only (do not execute during initialization):
 %s get <terminal>
 %s send <terminal> 'instructions'
 %s wait <terminal> --timeout 120
@@ -81,8 +87,9 @@ Never blindly resend: a failed or timed-out send may already have arrived.
 Read actual results: idle/done alone do not prove task success. Ask the user about permission or login dialogs.
 Do not start additional agents or terminals outside this roster.
 `, member.ID, team.Name, state.Project, state.LeaderName, roster.String(), team.Instructions, member.Instructions, cli, cli, cli, cli)
+	initialization := fmt.Sprintf("\nFor THIS initialization message only, reply exactly: %s ready.\nThen END YOUR TURN. Do not call any tools or run commands. Do not send a readiness acknowledgement to the leader or another terminal. Do not assign tasks, inspect the project, monitor terminals, or execute wait. The launcher tracks initialization; no report or confirmation from another agent is needed.\n", member.ID)
 	if member.ID == team.Leader {
-		return prompt + "You are the leader. For initialization only, acknowledge the roster and wait for the user's goal; do not assign work yet. Then assign scoped tasks to members, collect results with read, arrange review and run final verification. Never wait on yourself.\n"
+		return prompt + "After the user supplies a goal in a later message, act as leader: assign scoped tasks to members, collect results with read, arrange review and run final verification. Never wait on yourself.\n" + initialization
 	}
 	leaderAddress := ""
 	for _, m := range state.Members {
@@ -90,7 +97,7 @@ Do not start additional agents or terminals outside this roster.
 			leaderAddress = m.TerminalID
 		}
 	}
-	return prompt + fmt.Sprintf("For initialization only, acknowledge your role and wait; do not edit. When assigned work, report changes, checks and unresolved questions with %s send %s '<report>'; write long reports to a file and send its absolute path.\n", cli, shellQuote(leaderAddress))
+	return prompt + fmt.Sprintf("After completing a task assigned in a later message, report changes, checks and unresolved questions with %s send %s '<report>'; write long reports to a file and send its absolute path. After reporting, end your turn; do not wait on the leader or enter a monitoring loop.\n", cli, shellQuote(leaderAddress)) + initialization
 }
 func coreReady(out io.Writer, c *Core, state Startup) {
 	fmt.Fprintf(out, "Team ready. Attach to the leader: %s attach %s\n", shellQuote(c.Bin), shellQuote(state.LeaderName))

@@ -42,10 +42,11 @@ func TestCoreRPCServerHelper(t *testing.T) {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
 		os.Exit(0)
 	}
-	fail := func(kind, message string) {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": message, "data": map[string]string{"kind": kind, "hint": "read before retrying"}}})
+	failWithHint := func(kind, message, hint string) {
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32000, "message": message, "data": map[string]string{"kind": kind, "hint": hint}}})
 		os.Exit(0)
 	}
+	fail := func(kind, message string) { failWithHint(kind, message, "read before retrying") }
 	path := filepath.Join(root, "terminals")
 	data, _ := os.ReadFile(path)
 	terminals := []coreTerminal{}
@@ -66,9 +67,7 @@ func TestCoreRPCServerHelper(t *testing.T) {
 		for k, v := range labels {
 			terminal.Labels[k], _ = v.(string)
 		}
-		terminal.Status = &struct {
-			State string `json:"state"`
-		}{"idle"}
+		terminal.Status = &coreProgramStatus{State: "idle"}
 		if mode == "done" {
 			terminal.Status.State = "done"
 		}
@@ -82,6 +81,18 @@ func TestCoreRPCServerHelper(t *testing.T) {
 	case "terminal.get":
 		for _, terminal := range terminals {
 			if terminal.Address == terminalID {
+				_, sentErr := os.Stat(filepath.Join(root, "sent-"+terminalID))
+				if mode == "blocked" || (mode == "permission-after-send" && sentErr == nil) {
+					terminal.Status = &coreProgramStatus{State: "blocked", Kind: "permission"}
+				}
+				if _, err := os.Stat(filepath.Join(root, "settle-"+terminalID)); err == nil {
+					if mode == "settle-blocked" {
+						terminal.Status.State = "blocked"
+					}
+					if mode == "settle-identity" {
+						terminal.Name = "different-agent"
+					}
+				}
 				emit(terminal)
 			}
 		}
@@ -98,6 +109,9 @@ func TestCoreRPCServerHelper(t *testing.T) {
 		marker := filepath.Join(root, "sent-"+terminalID)
 		if _, err := os.Stat(marker); err == nil {
 			status = "done"
+			if mode == "permission-after-send" {
+				status = "blocked"
+			}
 			if mode == "message" || mode == "check-in" {
 				once := filepath.Join(root, "interrupted-"+terminalID)
 				if _, err := os.Stat(once); os.IsNotExist(err) {
@@ -117,10 +131,28 @@ func TestCoreRPCServerHelper(t *testing.T) {
 		}
 		emit(coreWait{Terminal: terminalID, Ended: ended, Reason: reason, Status: status, Turn: 1})
 	case "terminal.send":
+
+		if strings.HasPrefix(mode, "settle-") {
+			marker := filepath.Join(root, "settle-"+terminalID)
+			_, err := os.Stat(marker)
+			if os.IsNotExist(err) || mode == "settle-forever" {
+				_ = os.WriteFile(marker, nil, 0600)
+				failWithHint("unavailable", terminalID+" is still starting: its output has not settled", "nothing was typed; check hc read "+terminalID+", then retry")
+			}
+		}
+		if mode == "generic-unavailable" {
+			fail("unavailable", "send unavailable; delivery unknown")
+		}
 		if mode == "send-failure" {
 			fail("unavailable", "delivery uncertain")
 		}
 		_ = os.WriteFile(filepath.Join(root, "sent-"+terminalID), nil, 0600)
+		if mode == "lost-send-response" {
+			os.Exit(0)
+		}
+		if mode == "missing-turn" {
+			emit(map[string]any{"started": true})
+		}
 		// started:false must not be mistaken for failure or a reason to resend.
 		emit(map[string]any{"turn": 0, "started": false})
 	}
@@ -174,7 +206,7 @@ func countCoreCalls(calls []coreRequest, method string) int {
 	return n
 }
 func TestCoreLifecycle(t *testing.T) {
-	for _, mode := range []string{"idle", "done", "message", "check-in"} {
+	for _, mode := range []string{"idle", "done", "message", "check-in", "settle-once"} {
 		t.Run(mode, func(t *testing.T) {
 			project, root, entries := coreFixture(t)
 			write(t, filepath.Join(root, "mode"), mode)
@@ -221,7 +253,11 @@ func TestCoreLifecycle(t *testing.T) {
 					}
 				}
 			}
-			if countCoreCalls(calls, "terminal.send") != 2 {
+			expectedSends := 2
+			if mode == "settle-once" {
+				expectedSends = 4
+			}
+			if countCoreCalls(calls, "terminal.send") != expectedSends {
 				t.Fatal("role was resent")
 			}
 			if mode == "message" && !strings.Contains(out.String(), "continuing the same turn") {
@@ -243,7 +279,7 @@ func TestCoreLifecycle(t *testing.T) {
 				t.Fatal(out.String())
 			}
 			after := coreCalls(t, root)
-			if countCoreCalls(after, "terminal.run") != countCoreCalls(calls, "terminal.run") || countCoreCalls(after, "terminal.send") != 2 {
+			if countCoreCalls(after, "terminal.run") != countCoreCalls(calls, "terminal.run") || countCoreCalls(after, "terminal.send") != expectedSends {
 				t.Fatal("reuse/status launched or resent")
 			}
 		})
@@ -256,7 +292,7 @@ func modeStatus(mode string) string {
 	return "idle"
 }
 func TestCorePartialStartupDoesNotResend(t *testing.T) {
-	for _, mode := range []string{"blocked", "lost-launch", "send-failure"} {
+	for _, mode := range []string{"blocked", "lost-launch", "send-failure", "generic-unavailable", "lost-send-response", "missing-turn", "settle-blocked", "settle-identity", "permission-after-send"} {
 		t.Run(mode, func(t *testing.T) {
 			project, root, entries := coreFixture(t)
 			write(t, filepath.Join(root, "mode"), mode)
@@ -265,6 +301,9 @@ func TestCorePartialStartupDoesNotResend(t *testing.T) {
 				t.Fatal("accepted failed initialization")
 			}
 			before := coreCalls(t, root)
+			if mode != "blocked" && mode != "lost-launch" && countCoreCalls(before, "terminal.send") != 1 {
+				t.Fatal("retried an unsafe send")
+			}
 			if mode == "blocked" && countCoreCalls(before, "terminal.send") != 0 {
 				t.Fatal("sent to blocked terminal")
 			}
@@ -350,5 +389,107 @@ func TestCoreRPCErrorAndCancellation(t *testing.T) {
 	err = (&Core{*h}).call(ctx, &result, "terminal.list", map[string]any{})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("transport ignored deadline: %v", err)
+	}
+}
+
+func TestCoreSafeStartupRetryClassification(t *testing.T) {
+	valid := func() *coreRPCError {
+		e := &coreRPCError{Code: -32000, Message: "t1 is still starting: its output has not settled"}
+		e.Data.Kind = "unavailable"
+		e.Data.Hint = "nothing was typed; check hc read t1, then retry"
+		return e
+	}
+	if !startupSendWasNotTyped(fmt.Errorf("wrapped: %w", valid()), "t1") {
+		t.Fatal("lost structured RPC error")
+	}
+	for _, change := range []func(*coreRPCError){
+		func(e *coreRPCError) { e.Code = -32603 },
+		func(e *coreRPCError) { e.Data.Kind = "blocked" },
+		func(e *coreRPCError) { e.Message = "delivery uncertain" },
+		func(e *coreRPCError) { e.Data.Hint = "try again" },
+	} {
+		e := valid()
+		change(e)
+		if startupSendWasNotTyped(e, "t1") {
+			t.Fatalf("unsafe error accepted: %v", e)
+		}
+	}
+	for _, err := range []error{errors.New(valid().Error()), errors.Join(valid(), context.DeadlineExceeded), errors.Join(valid(), context.Canceled)} {
+		if startupSendWasNotTyped(err, "t1") {
+			t.Fatalf("unsafe error accepted: %v", err)
+		}
+	}
+	if startupSendWasNotTyped(valid(), "t2") {
+		t.Fatal("accepted another terminal's error")
+	}
+}
+
+func TestCoreStartupRetryBudget(t *testing.T) {
+	project, root, entries := coreFixture(t)
+	write(t, filepath.Join(root, "mode"), "settle-forever")
+	c := &Core{Herdr{Bin: envMap(entries)["HERDR_CORE_BIN_PATH"], Env: entries}}
+	var terminal coreTerminal
+	if err := c.call(context.Background(), &terminal, "terminal.run", map[string]any{"name": "test-leader", "cwd": project, "labels": map[string]string{"herdr-team": "test-leader"}}); err != nil {
+		t.Fatal(err)
+	}
+	entry := StartedMember{Name: terminal.Name, TerminalID: terminal.Address}
+	var out bytes.Buffer
+	err := c.initializeRoleWithBudget(entry, project, "test-leader", "role", &out, 500*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("startup retry ignored deadline: %v", err)
+	}
+	calls := coreCalls(t, root)
+	if countCoreCalls(calls, "terminal.send") == 0 {
+		t.Fatal("did not exercise settle rejection")
+	}
+	if _, err := os.Stat(filepath.Join(root, "sent-"+entry.TerminalID)); !os.IsNotExist(err) {
+		t.Fatal("role was delivered")
+	}
+}
+
+func TestCoreInitializationHasNoToolActions(t *testing.T) {
+	_, _, team := fixture(t)
+	state := Startup{LeaderName: "team-leader", Members: []StartedMember{{ID: "leader", Name: "team-leader", TerminalID: "t1"}, {ID: "dev", Name: "team-dev", TerminalID: "t2"}}}
+	for _, member := range team.Members {
+		prompt := corePrompt(team, member, state, "herdr-core")
+		for _, required := range []string{
+			"This message installs your role only; it does not assign a task.",
+			"INITIALIZATION: Do not call tools, run commands, inspect files, send messages, or invoke any wait command.",
+			"not execute herdr-core wait",
+			"Commands for future assigned tasks only",
+			"reply exactly: " + member.ID + " ready.",
+			"Then END YOUR TURN.",
+			"Do not send a readiness acknowledgement to the leader",
+		} {
+			if !strings.Contains(prompt, required) {
+				t.Fatalf("%s initialization missing %q", member.ID, required)
+			}
+		}
+		if member.ID != team.Leader && !strings.Contains(prompt, "After reporting, end your turn; do not wait on the leader") {
+			t.Fatal("member can enter a leader-wait loop")
+		}
+	}
+}
+
+func TestCorePermissionAfterSendDiagnostic(t *testing.T) {
+	project, root, entries := coreFixture(t)
+	write(t, filepath.Join(root, "mode"), "permission-after-send")
+	err := run([]string{"--backend", "core", "--project", project}, entries, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("accepted permission-blocked initialization")
+	}
+	for _, required := range []string{"blocked: permission", "attach 't2'", "handle the prompt manually", "no automatic approval or role resend"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Fatalf("missing %q: %v", required, err)
+		}
+	}
+	calls := coreCalls(t, root)
+	if countCoreCalls(calls, "terminal.send") != 1 {
+		t.Fatal("resent or automatically answered a permission dialog")
+	}
+	for _, req := range calls {
+		if req.Method == "terminal.send" && req.Params["force"] != false {
+			t.Fatal("forced permission input")
+		}
 	}
 }

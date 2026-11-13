@@ -14,13 +14,20 @@ options = parser.parse_args()
 plugin = str(Path(options.plugin).resolve())
 
 PROGRAM = r'''
-import os, subprocess, sys, tty
+import os, subprocess, sys, tty, threading, time
 tty.setraw(0)
 mode, receipts, core, caller = sys.argv[1:]
-def report(state):
-    os.write(1, ('\x1b]7501;state=' + state + ':app=team-verification\x1b\\').encode())
+def report(state, kind=""):
+    os.write(1, ('\x1b]7501;state=' + state + ':app=team-verification' + (':kind=' + kind if kind else '') + '\x1b\\').encode())
 os.write(1, b'\x1b[?2004h')
-report('idle' if mode == 'message' else mode)
+report('idle' if mode in ('message', 'settling', 'permission') else mode)
+if mode == 'settling':
+    def startup_output():
+        until = time.monotonic() + 6.5
+        while time.monotonic() < until:
+            os.write(1, b'booting...\r\n')
+            time.sleep(0.05)
+    threading.Thread(target=startup_output, daemon=True).start()
 data = b''
 while True:
     chunk = os.read(0, 65536)
@@ -36,7 +43,7 @@ while True:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            check=True, timeout=20)
         os.write(1, b'role acknowledged\r\n')
-        report('done')
+        report('blocked', 'permission') if mode == 'permission' else report('done')
         data = b''
 '''
 
@@ -81,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
         caller = call("run", "--bg", "--no-parent", "--no-notify", "--name", "verification-caller",
                       "--cwd", str(root), "--", "/usr/bin/env", "python3", str(program),
                       "working", str(root / "caller-receipts"), "", "")["address"]
-        for mode in ["idle", "done", "message"]:
+        for mode in ["idle", "done", "message", "settling", "permission"]:
             project = root / mode
             (project / ".team" / "members").mkdir(parents=True)
             (project / ".team" / "team.md").write_text(
@@ -91,10 +98,25 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
                 (project / ".team" / "members" / (member + ".md")).write_text(
                     "---\nid: " + member + "\nkind: python3\nargs: " + json.dumps(arguments) + "\n---\nFixture only\n")
             env["HC_TERMINAL_ID"] = caller if mode == "message" else ""
+            if mode == "permission":
+                failure = subprocess.run([plugin, "--backend", "core", "--project", str(project)],
+                                         env=env, text=True, capture_output=True, timeout=90)
+                assert failure.returncode != 0, failure.stdout
+                assert "blocked: permission" in failure.stderr and "attach" in failure.stderr, failure.stderr
+                before = receipts()
+                assert sum(before.get(str(root / ("receipt-" + mode + "-" + member)), 0)
+                           for member in ["leader", "dev"]) == 1, before
+                status = invoke(project, "--status")
+                assert "Team startup: partial" in status and "blocked" in status, status
+                assert receipts() == before, "status answered a permission dialog"
+                print("PASS: permission blockage preserved, attach diagnostic, no automatic input")
+                continue
             output = invoke(project)
             assert "Team ready" in output, output
             if mode == "message":
                 assert "continuing the same turn" in output, output
+            if mode == "settling":
+                assert "nothing was typed, retrying" in output, output
             live = terminals()
             before = receipts()
             assert all(before.get(str(root / ("receipt-" + mode + "-" + member))) == 1

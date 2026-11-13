@@ -6,9 +6,11 @@
 
 `--backend core` 以官方 0.1.21 发布的 OpenRPC schema 为接口基准，通过 `herdr-core connect` 的 plain 模式交换逐行 JSON-RPC 2.0 请求与响应。校验响应版本、请求 ID 和结构化错误，不解析 CLI `run/ls` 的简略记录。`terminal.run/list/get` 返回完整终端结构，包含对象形式的 status 和 labels。默认自动选择：旧版 `HERDR_ENV=1` 使用 Herdr，否则使用 core。core 以当前目录或 `--project` 作为项目，无需工作区上下文；状态文件以 `server.status` 返回的永久 core ID 和项目路径隔离，不受调用终端变化影响。
 
-启动前保存所有计划成员名，通过 `terminal.run` 的 `wait=false`、`no_parent=true`、`no_notify=true` 创建独立持久终端，并标记团队标签；Codex 添加 `--no-daemon`。使用 `terminal.wait` 等待 idle/done，再通过 `terminal.get` 核验终端地址、名称、目录和标签。就绪预算为 30 秒。
+启动前保存所有计划成员名，通过 `terminal.run` 的 `wait=false`、`no_parent=true`、`no_notify=true` 创建独立持久终端，并标记团队标签；Codex 添加 `--no-daemon`。使用 `terminal.wait` 等待 idle/done，再通过 `terminal.get` 核验终端地址、名称、目录和标签。就绪与启动稳定预算为 60 秒。
 
-角色提示通过 `terminal.send` 发送一次，然后通过 `terminal.wait` 等待本轮结束。所有 send/wait 使用稳定 caller（当前 `HC_TERMINAL_ID`，否则 `ppid:<插件进程 ID>`），保证跨 connect 子进程仍跟踪相同发送轮次。message 和 timeout 是等待被打断或检查点，继续等待，不重发；发送后的总等待预算为 120 秒。即使 send 返回 started=false，也通过 wait 跟踪其后续处理，不将旧的 idle 状态当作完成。最终必须收到已结束的 idle/done status 结果。先初始化普通成员，再初始化 Leader，最终输出 attach 命令。
+角色提示通过 `terminal.send` 投递。按官方 `first_message` 的处理，仅当结构化 RPC 错误精确匹配启动 settle 拒绝，且 hint 明确说明 `nothing was typed` 时，在总启动预算内以 100ms 退避重试；每次先重新等待就绪并核验终端身份与状态。blocked、身份变化、普通 unavailable、传输失败、缺少 turn 或取消/超时均不重试发送。提示成功投递一次，然后通过 `terminal.wait` 等待本轮结束。所有 send/wait 使用稳定 caller（当前 `HC_TERMINAL_ID`，否则 `ppid:<插件进程 ID>`），保证跨 connect 子进程仍跟踪相同发送轮次。message 和 timeout 是等待被打断或检查点，继续等待，不重发；发送后的总等待预算为 120 秒。即使 send 返回 started=false，也通过 wait 跟踪其后续处理，不将旧的 idle 状态当作完成。最终必须收到已结束的 idle/done status 结果。先初始化普通成员，再初始化 Leader，最终输出 attach 命令。
+
+初始化提示在正文前后明确限定本轮只回复 `<角色> ready.` 并结束，不调用工具、运行命令、检查项目、向 Leader 发就绪消息或监控终端。协作命令仅用于后续任务；成员汇报后结束本轮，不对 Leader 执行 wait。这样避免“等待任务”被解释为执行等待命令，从而产生初始化阶段的权限弹窗或提前唤醒 Leader。core 报告 blocked 时，查询完整 status.kind，显示权限/问题/认证原因和该终端的 attach 指引；不自动处理弹窗，也不重发已经送达的角色提示。
 
 发布 schema 的 send.if 仅接受 idle/working，因此 idle 使用 `if=idle`，done 不发送非法条件值；两种情况下均保持 force=false，core 会拒绝向 blocked 对话框输入。done 的状态检查与发送不是原子的，初始化期间不应向成员另发指令。
 

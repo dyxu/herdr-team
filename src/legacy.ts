@@ -130,7 +130,9 @@ export async function resolveProject(
     if (pane) candidate = (await client.call(['pane', 'get', pane])).pane?.cwd;
   }
   if (!candidate)
-    throw new Error('cannot determine project directory; pass --project /absolute/project/path');
+    throw new Error(
+      'cannot determine project directory; supply the project path after the subcommand',
+    );
   const project = await canonical(candidate);
   if (!(await stat(project)).isDirectory()) throw new Error('project path is not a directory');
   return { project, workspace };

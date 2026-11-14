@@ -63,7 +63,7 @@ ID: T001
 
 ## 可选通信检查
 
-`--template router-worker` 只选择团队职责，默认不触发通信探针。需要验证真实工具权限时，在初始化后的 `.team/team.md` frontmatter 中添加 `workflow: router-worker`，保留其他字段和正文：
+`init . router-worker` 只选择团队职责，默认不触发通信探针。需要验证真实工具权限时，在初始化后的 `.team/team.md` frontmatter 中添加 `workflow: router-worker`，保留其他字段和正文：
 
 ```yaml
 ---
@@ -98,7 +98,7 @@ members:
 ```sh
 npm ci
 npm run build
-bin/herdr-team --init --template router-worker --project /absolute/project/path
-bin/herdr-team --check --project /absolute/project/path
-bin/herdr-team --backend core --project /absolute/project/path
+bin/herdr-team init /absolute/project/path router-worker
+bin/herdr-team check /absolute/project/path
+bin/herdr-team core start /absolute/project/path
 ```

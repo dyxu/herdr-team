@@ -73,7 +73,7 @@ export async function selectTemplate(
   if (!root && (await exists(name))) root = name;
   if (!root)
     throw new Error(
-      `unknown template ${JSON.stringify(name)}; use --list-templates or specify a template directory`,
+      `unknown template ${JSON.stringify(name)}; run herdr-team templates or specify a template directory`,
     );
   await checkTemplateTree(root);
   return { root: await canonical(root) };

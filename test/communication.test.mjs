@@ -81,7 +81,7 @@ for (const core of [true, false])
     });
 test('opt-in workflow cannot reuse an old unverified ready team', async (t) => {
   const f = await coreFixture(t);
-  await run(['--backend', 'core', '--project', f.project], f.env, () => {});
+  await run(['core', 'start', f.project], f.env, () => {});
   const file = path.join(f.project, '.team/team.md');
   await writeFile(
     file,
@@ -91,7 +91,7 @@ test('opt-in workflow cannot reuse an old unverified ready team', async (t) => {
     ),
   );
   await assert.rejects(
-    run(['--backend', 'core', '--project', f.project], f.env, () => {}),
+    run(['core', 'start', f.project], f.env, () => {}),
     /has not passed/,
   );
   assert.equal((await readStartup(f.state)).status, 'ready');
@@ -108,7 +108,7 @@ test('failed post-initialization check preserves initialized members but never m
   );
   let output = '';
   await assert.rejects(
-    run(['--backend', 'core', '--project', f.project], f.env, (text) => (output += text)),
+    run(['core', 'start', f.project], f.env, (text) => (output += text)),
     /communication check failed/,
   );
   const state = await readStartup(f.state);
@@ -118,7 +118,7 @@ test('failed post-initialization check preserves initialized members but never m
   assert.equal(state.stage, 'checking communication');
   assert.doesNotMatch(output, /Team ready/);
   await assert.rejects(
-    run(['--backend', 'core', '--project', f.project], f.env, () => {}),
+    run(['core', 'start', f.project], f.env, () => {}),
     /incomplete/,
   );
 });

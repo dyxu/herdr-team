@@ -33,9 +33,9 @@ jobs:
         run: |
           project="$(mktemp -d)"
           trap 'rm -rf "$project"' EXIT
-          bin/herdr-team --list-templates
+          bin/herdr-team templates
           for template in minimal router-worker; do
             mkdir "$project/$template"
-            bin/herdr-team --init --template "$template" --project "$project/$template"
-            bin/herdr-team --check --project "$project/$template"
+            bin/herdr-team init "$project/$template" "$template"
+            bin/herdr-team check "$project/$template"
           done

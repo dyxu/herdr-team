@@ -20,7 +20,7 @@ npm test
 | `test/legacy.test.mjs` | 旧版 Herdr 的项目上下文、kind 发现、并发初始化、部分失败保存、状态查询及聚焦重试 |
 | `test/communication.test.mjs` | 可选通信检查的正确、缺失、过期回执，错误身份、符号链接和失败状态 |
 
-默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22 / 24 的组合，并检查构建后的模板列表、初始化和 `--check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
+默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22 / 24 的组合，并检查构建后的模板列表、初始化和 `check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
 
 ## 真实 herdr-core 回归
 
@@ -31,13 +31,13 @@ npm ci
 npm run verify:core
 
 # 指定 core 路径时使用：
-npm run verify:core -- --core /absolute/path/to/herdr-core
+HERDR_CORE_BIN_PATH=/absolute/path/to/herdr-core npm run verify:core
 ```
 
 也可在已有构建产物时直接运行：
 
 ```sh
-python3 scripts/verify-core.py --core /absolute/path/to/herdr-core
+python3 scripts/verify-core.py /absolute/path/to/herdr-core
 ```
 
 脚本使用专用 socket、`HC_SESSION`、XDG 目录和临时项目，与用户已有 core 分开。验证以下场景后，清理本次 core 及终端：
@@ -59,15 +59,15 @@ plugin="$PWD/bin/herdr-team"
 test_project="$(mktemp -d)"
 test_state="$(mktemp -d)"
 
-"$plugin" --init --template minimal --project "$test_project"
-HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
-HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --status --project "$test_project"
-HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
+"$plugin" init "$test_project" minimal
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" core start "$test_project"
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" core status "$test_project"
+HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" core start "$test_project"
 ```
 
 这些命令使用当前 core，独立的 `HERDR_PLUGIN_STATE_DIR` 只隔离插件记录。需要进一步隔离 core 时，应同时使用专用 socket、session 和 XDG 目录；现有 `verify-core.py` 展示了该配置方式，但它自身运行的是 fixture。
 
-检查重复启动未新增终端、未重发角色提示，再按输出的 attach 命令进入 Leader 并分派一个可验证的小任务。router-worker 可将初始化命令改为 `--template router-worker`，分派两个需要修改同一文件的任务，检查范围申报、串行写入、实际报告及最终验证。
+检查重复启动未新增终端、未重发角色提示，再按输出的 attach 命令进入 Leader 并分派一个可验证的小任务。router-worker 可将初始化命令改为 `init "$test_project" router-worker`，分派两个需要修改同一文件的任务，检查范围申报、串行写入、实际报告及最终验证。
 
 默认的角色 ready 仅证明初始化回合结束，不能证明团队通信权限可用。可按[模板说明](router-worker.md#可选通信检查)启用 `workflow: router-worker`，让启动器在角色初始化后独立验证查询和回执。此检查使用真实 Agent 执行工具，可能触发权限或登录确认；不会自动批准、修改沙箱或重复发送。
 
@@ -87,7 +87,7 @@ HERDR_TEAM_INTEGRATION=1 npm run verify:herdr
 
 ## 故障排查
 
-先运行对应后端的 `--status --project ...`，读取启动阶段、错误、成员身份及实际终端状态，再决定下一步。
+先运行对应后端的 `status <项目路径>`（例如 `herdr-team core status /project`），读取启动阶段、错误、成员身份及实际终端状态，再决定下一步。
 
 | 现象 | 处理方式 |
 | --- | --- |
@@ -96,7 +96,7 @@ HERDR_TEAM_INTEGRATION=1 npm run verify:herdr
 | send 失败、超时或响应丢失 | 先 get/read 核实是否已送达，不直接重发 |
 | partial 且启动器已退出 | 检查保留的成员和错误；排查后关闭该团队，再启动，不自动续接未完成初始化 |
 | 配置变更 | 运行中的团队仍使用旧配置，关闭旧团队后启动才生效 |
-| 配置文件损坏 | 仍可用 `--status` 查询已有团队，再修复 `.team` |
+| 配置文件损坏 | 仍可用 `status` 查询已有团队，再修复 `.team` |
 | 通信检查未通过 | 查看 `checking communication` 阶段和 `.team/.communication-*` 中保留的脚本与证据；待权限问题解决后按 partial 流程处理 |
 | Herdr kind 不支持或解析失败 | 查看 `herdr --version`、`herdr status server`、`herdr agent start --help`，核对 kind 和客户端兼容性 |
 
@@ -108,7 +108,7 @@ TypeScript 版本使用 `<启动记录文件>.lock.d` 目录锁，正常结束�
 
 1. 用错误路径定位锁目录，读取 `owner.json`，核对该 PID 及项目相关初始化进程是否仍在运行。
 2. 如果仍有初始化进程，等待其完成或先处理其阻塞，不删除锁。
-3. 只有确认对应初始化进程已退出后，才手动删除这个锁目录。保留启动记录与团队终端，先 `--status` 诊断是否为 ready 或 partial，再决定是否重试。
+3. 只有确认对应初始化进程已退出后，才手动删除这个锁目录。保留启动记录与团队终端，先 `status` 诊断是否为 ready 或 partial，再决定是否重试。
 
 旧版 Go 使用 flock，与新目录锁不互通。升级到 TypeScript 版本前，先结束旧版初始化进程；已有完整 ready 团队的记录和配置无需转换。
 
@@ -133,3 +133,10 @@ TypeScript 版本使用 `<启动记录文件>.lock.d` 目录锁，正常结束�
 | 2026-11-14 | herdr-core 0.1.21、Codex 0.169.0；router-worker 三成员初始化及复用通过，Router 首次 get Worker 被自身沙箱拦截，进入权限确认 | 两个 Worker 尚未收到同文件开发任务；未批准弹窗，协作未验证通过 |
 
 最后一次真实 router-worker 测试当时将现场与画面保存到 `/private/tmp/herdr-rw-live-d_9h4xjz/`。这是临时路径，可能已被清理，不属于项目长期归档，也不保证对应终端仍在运行。
+
+
+### 子命令接口
+
+应用 CLI 使用 `init`、`start`、`status`、`check`、`templates`、`help`，后端用命令前的 `auto` / `core` / `herdr` 分组指定。旧双横杠操作参数会报错，不会触发后端；无参数运行只显示帮助。插件 action、CI 和真实 core 脚本均使用新接口。
+
+`test/config.test.mjs` 还检查位置参数、自定义模板根目录、空参数保留 Herdr 项目上下文及帮助的离线行为；core 测试覆盖显式分组和自动后端选择。验证脚本使用 `python3 scripts/verify-core.py [core路径] [CLI路径]`，core 路径缺省取 `HERDR_CORE_BIN_PATH` 或 `herdr-core`。

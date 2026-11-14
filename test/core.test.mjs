@@ -63,7 +63,7 @@ for (const mode of ['idle', 'done', 'message', 'check-in', 'settle-once', 'notif
   test(`core ${mode}: initialize, observe, reuse without resending`, async (t) => {
     const f = await coreFixture(t, mode);
     let output = '';
-    await run(['--backend', 'core', '--project', f.project], f.env, (text) => (output += text));
+    await run(['core', 'start', f.project], f.env, (text) => (output += text));
     assert.match(output, /Team ready/);
     const state = await readStartup(f.state);
     assert.equal(state.status, 'ready');
@@ -93,18 +93,14 @@ for (const mode of ['idle', 'done', 'message', 'check-in', 'settle-once', 'notif
     assert.ok(sends.at(-1).params.text.includes('member leader'));
     if (mode === 'message') assert.match(output, /continuing the same turn/);
     output = '';
-    await run(
-      ['--backend', 'core', '--status', '--project', f.project],
-      f.env,
-      (text) => (output += text),
-    );
+    await run(['core', 'status', f.project], f.env, (text) => (output += text));
     assert.match(output, /Team startup: ready/);
     await writeFile(
       path.join(f.project, '.team/members/dev.md'),
       '---\nid: dev\nkind: codex\n---\nChanged',
     );
     output = '';
-    await run(['--backend', 'core', '--project', f.project], f.env, (text) => (output += text));
+    await run(['core', 'start', f.project], f.env, (text) => (output += text));
     assert.match(output, /Configuration changed/);
     const after = await coreCalls(f.directory);
     assert.equal(count(after, 'terminal.send'), sends.length);
@@ -123,7 +119,7 @@ for (const mode of [
 ])
   test(`core ${mode}: preserve partial state and never blindly resend`, async (t) => {
     const f = await coreFixture(t, mode),
-      args = ['--backend', 'core', '--project', f.project];
+      args = ['core', 'start', f.project];
     await assert.rejects(run(args, f.env, () => {}));
     assert.equal((await readStartup(f.state)).status, 'partial');
     const before = await coreCalls(f.directory);
@@ -229,4 +225,12 @@ test('RPC deadline remains bounded when a descendant holds the transport pipes',
     /timed out|canceled/,
   );
   assert.ok(Date.now() - started < 2000);
+});
+test('start and status use the automatic core backend outside Herdr', async (t) => {
+  const f = await coreFixture(t);
+  const env = { ...f.env, HERDR_ENV: '' };
+  await run(['start', f.project], env, () => {});
+  let output = '';
+  await run(['status', f.project], env, (text) => (output += text));
+  assert.match(output, /Team startup: ready/);
 });

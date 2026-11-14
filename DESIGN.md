@@ -31,13 +31,24 @@ CLI 可单独复制，运行时仍需 Node.js；无需另行复制 `node_modules
 
 ## CLI 与后端选择
 
-`--backend auto` 为默认值：环境中 `HERDR_ENV=1` 时使用旧版 Herdr，其他情况使用 herdr-core。可通过 `--backend core` 或 `--backend herdr` 显式指定。
+CLI 使用 `herdr-team [auto|core|herdr] <命令> [位置参数]`，不提供旧的双横杠操作参数。无参数或仅输入后端分组时显示帮助，不启动团队。
 
-`--init`、`--check`、`--list-templates`、`--status` 两两互斥。前三者是离线操作，不启动 Agent；`--status` 需要连接所选后端，查询已有记录和成员，不创建成员、投递提示、聚焦或关闭终端。
+| 命令 | 参数与行为 |
+| --- | --- |
+| `init [project] [template] [templates-directory]` | 离线创建 `.team`，模板默认 development |
+| `start [project]` | 启动或复用团队 |
+| `status [project]` | 连接后端查询记录和成员，不创建成员、投递提示、聚焦或关闭终端 |
+| `check [project]` | 离线验证团队配置 |
+| `templates [directory]` | 离线列出模板 |
+| `help [command]` | 显示全部或指定命令的帮助 |
 
-- core 使用当前目录或 `--project` 作为项目，不要求工作区上下文。
-- 旧版 Herdr 要求 `HERDR_ENV=1` 及当前 workspace。项目目录依次取显式 `--project`、上下文中的 worktree、workspace 目录、pane 目录；必要时查询当前 pane。
-- `--template` 仅用于 `--init`。`--templates-dir` 仅用于 `--init` 或 `--list-templates`，显式参数优先于 `HERDR_TEAM_TEMPLATES_DIR`，显式空字符串可取消环境变量指定的目录。
+省略后端分组等同于 `auto`：环境中 `HERDR_ENV=1` 时使用旧版 Herdr，其他情况使用 herdr-core。例如 `herdr-team core start /project` 显式选择 core，`herdr-team herdr status /project` 查询旧版团队。
+
+- core 的 project 位置参数缺省为当前目录，不要求 workspace 上下文。
+- 旧版 Herdr 要求 `HERDR_ENV=1` 及当前 workspace。项目目录依次取显式 project、上下文中的 worktree、workspace 目录、pane 目录；必要时查询当前 pane。
+- `init . router-worker` 在当前目录选择模板；project 传入空字符串则保留默认项目解析，供插件的 fullstack action 使用。要选择以连字符开头的路径，应写成 `./-name`。
+- 模板根目录的位置参数优先于 `HERDR_TEAM_TEMPLATES_DIR`；显式空字符串可取消环境变量指定的目录，如 `templates ""`。
+- 未知命令、旧参数语法和多余位置参数在连接后端之前报错。
 
 ## 团队定义
 
@@ -85,9 +96,9 @@ args: []
 
 默认模板为 `development`，另提供 `minimal`、`product`、`fullstack`、`research`、`content`、`data-analysis`、`security` 和 `router-worker`。
 
-模板结构与 `.team` 相同，可指定内置名称、显式模板目录，或通过 `--templates-dir` / `HERDR_TEAM_TEMPLATES_DIR` 指定命名模板根目录。同名用户模板优先于内置模板；命名模板优先于同名相对目录，使用 `./NAME` 可明确选择本地目录。
+模板结构与 `.team` 相同，可指定内置名称、显式模板目录，或通过 `init` 的第三个位置参数或 `HERDR_TEAM_TEMPLATES_DIR` 指定命名模板根目录。同名用户模板优先于内置模板；命名模板优先于同名相对目录，使用 `./NAME` 可明确选择本地目录。
 
-外部模板拒绝符号链接和特殊文件，源目录不能等于或包含目标项目。初始化先验证源配置，在项目内暂存并再次校验，独占预留 `.team` 后原子发布。已有 `.team` 拒绝覆盖；失败清理暂存目录。`--list-templates` 列出内置及有效的用户模板。
+外部模板拒绝符号链接和特殊文件，源目录不能等于或包含目标项目。初始化先验证源配置，在项目内暂存并再次校验，独占预留 `.team` 后原子发布。已有 `.team` 拒绝覆盖；失败清理暂存目录。`templates` 列出内置及有效的用户模板。
 
 Router/Worker 的职责、任务记录与共享目录规则见[模板设计](docs/router-worker.md)。
 
@@ -140,9 +151,9 @@ caller 使用 `HC_TERMINAL_ID`，未设置时为 `ppid:<启动器进程 ID>`，�
 
 ## 状态、并发与迁移
 
-状态目录优先取 `HERDR_PLUGIN_STATE_DIR`，默认沿用 `~/.local/state/herdr-agent-team`。记录保存项目、团队和成员身份、配置 SHA-256 摘要、启动阶段、错误及可选通信检查状态。`--status` 即使当前 `.team` 配置损坏，也可显示已有记录和后端状态。
+状态目录优先取 `HERDR_PLUGIN_STATE_DIR`，默认沿用 `~/.local/state/herdr-agent-team`。记录保存项目、团队和成员身份、配置 SHA-256 摘要、启动阶段、错误及可选通信检查状态。`status` 即使当前 `.team` 配置损坏，也可显示已有记录和后端状态。
 
-配置变更只提示，不修改正在运行的团队。旧记录没有摘要时明确提示无法比较。原 Go 版本的记录路径和 JSON 格式保留，摘要也保留字段顺序、缺省 args 的 null 表示和 HTML 转义，已有配置无需转换；已用原 Go 产物创建的模拟团队验证跨版本复用。
+配置变更只提示，不修改正在运行的团队。旧记录没有摘要时明确提示无法比较。CLI 操作已改为子命令，旧参数脚本需要更新；原 Go 版本的记录路径和 JSON 格式保留，摘要也保留字段顺序、缺省 args 的 null 表示和 HTML 转义，已有配置无需转换；已用原 Go 产物创建的模拟团队验证跨版本复用。
 
 启动使用 `<记录文件>.lock.d` 原子目录锁，owner.json 保存 PID 与创建时间。正常结束在 finally 中释放，异常退出可能残留；恢复步骤见[验证指南](docs/verification.md#启动目录锁残留)。旧版 flock 与新目录锁不互通，迁移前需先结束旧版初始化进程。已有存活团队不等于仍有初始化进程，不能通过删除启动记录来代替排查。
 

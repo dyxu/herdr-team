@@ -15,13 +15,13 @@ team="$PWD/bin/herdr-team"
 project="/absolute/project/path"
 
 # 首次使用：创建 Leader、Developer、Reviewer 团队
-"$team" --init --project "$project"
+"$team" init "$project"
 
 # 启动团队
-"$team" --backend core --project "$project"
+"$team" core start "$project"
 ```
 
-已有 `.team/` 时跳过 `--init`。在目标项目目录调用 CLI 时，可省略 `--project`。构建产物 `bin/herdr-team` 已包含依赖和全部内置模板，可单独复制使用；运行机器仍需 Node.js。
+已有 `.team/` 时跳过 `init`。在目标项目目录执行 `start`、`status` 或 `check` 时，可省略项目路径。构建产物 `bin/herdr-team` 已包含依赖和全部内置模板，可单独复制使用；运行机器仍需 Node.js。
 
 等待输出 `Team ready`，执行输出中的 `herdr-core attach <leader-name>` 进入 Leader，然后描述任务，例如：
 
@@ -36,25 +36,38 @@ project="/absolute/project/path"
 
 自定义 Agent 需支持 OSC 7501 状态上报，并保持交互运行。修改配置后，关闭旧团队再启动才能生效。
 
-默认模板为 `development`；首次初始化时可加 `--template minimal` 创建两人团队，或选择其他模板。
+默认模板为 `development`；`init "$project" minimal` 创建两人团队，`init "$project" router-worker` 选择 Router / Worker 模板。
 
-`--template router-worker` 创建一个 Router 和两个通用 Worker：Router 保留原始请求并协调任务归属与文件占用，Worker 自主完成调查、实现、验证和后续修复。适合多个独立任务；设计依据和共享目录下的适配见 [Router / Worker 模板设计](docs/router-worker.md)。
+`router-worker` 创建一个 Router 和两个通用 Worker：Router 保留原始请求并协调任务归属与文件占用，Worker 自主完成调查、实现、验证和后续修复。适合多个独立任务；设计依据和共享目录下的适配见 [Router / Worker 模板设计](docs/router-worker.md)。
 
 ```sh
 # 使用 Router / Worker 模板初始化新团队
-"$team" --init --template router-worker --project "$project"
+"$team" init "$project" router-worker
 
 # 查看可用模板
-"$team" --list-templates
+"$team" templates
 
 # 检查当前团队配置
-"$team" --check --project "$project"
+"$team" check "$project"
 ```
+
+## 命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `init [项目] [模板] [模板根目录]` | 创建 `.team`，默认模板为 development |
+| `start [项目]` | 启动或复用团队 |
+| `status [项目]` | 查询启动记录和实时成员状态 |
+| `check [项目]` | 离线校验团队配置 |
+| `templates [模板根目录]` | 离线列出模板 |
+| `help [命令]` | 查看帮助；无参数运行也显示帮助 |
+
+例如在当前目录使用 `herdr-team init . router-worker`。命令前可加 `core`、`herdr` 或 `auto` 分组指定后端。命名模板根目录也可通过 `HERDR_TEAM_TEMPLATES_DIR` 设置。
 
 ## 状态与故障处理
 
 ```sh
-"$team" --backend core --status --project "$project"
+"$team" core status "$project"
 ```
 
 - **启动画面未稳定**：插件会对明确未输入的角色提示自动重试，等待结果即可。
@@ -75,7 +88,7 @@ herdr plugin install dyxu/herdr-team
 
 在 Herdr 中选中目标项目，从 action palette 依次选择 **Initialize project Herdr Team** 和 **Start project Herdr Team**；已有 `.team/` 时跳过初始化。启动完成后向 Leader 描述任务。
 
-`--backend auto` 为默认值：旧版 Herdr 环境使用插件后端，其他环境使用 core。也可用 `--backend core` 或 `--backend herdr` 显式指定。
+省略后端分组时自动选择：旧版 Herdr 环境使用插件后端，其他环境使用 core。可用 `herdr-team core start` 或 `herdr-team herdr start` 显式指定。
 
 ## 开发与迁移
 
@@ -88,6 +101,6 @@ npm run check
 npm test
 ```
 
-`npm test` 会先构建，再执行自动测试，不启动真实 Agent。TypeScript 版沿用原 `.team` 配置和启动记录，无需转换；升级时先结束旧版初始化进程，再构建和使用新版 CLI。
+`npm test` 会先构建，再执行自动测试，不启动真实 Agent。`.team` 配置和启动记录无需转换。CLI 已改为子命令，原双横杠操作参数不再接受，调用脚本需同步更新；升级时先结束旧版初始化进程，再构建和使用新版 CLI。
 
 实现结构与迁移细节见 [DESIGN.md](DESIGN.md)，真实后端验证、历史记录与故障处理见[验证指南](docs/verification.md)。

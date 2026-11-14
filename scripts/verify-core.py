@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--core", default="herdr-core")
-parser.add_argument("--plugin", default="bin/herdr-team")
+parser.add_argument("core", nargs="?", default=os.environ.get("HERDR_CORE_BIN_PATH", "herdr-core"))
+parser.add_argument("plugin", nargs="?", default="bin/herdr-team")
 options = parser.parse_args()
 plugin = str(Path(options.plugin).resolve())
 
@@ -72,8 +72,8 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
         # ls JSON is intentionally abbreviated; get returns the complete record.
         return [call("get", row["address"]) for row in call("ls", "--all")["terminals"]]
 
-    def invoke(project, *flags):
-        result = subprocess.run([plugin, "--backend", "core", "--project", str(project), *flags],
+    def invoke(project, command="start"):
+        result = subprocess.run([plugin, "core", command, str(project)],
                                 env=env, text=True, capture_output=True, timeout=90)
         if result.returncode:
             raise RuntimeError(result.stdout + result.stderr)
@@ -99,14 +99,14 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
                     "---\nid: " + member + "\nkind: python3\nargs: " + json.dumps(arguments) + "\n---\nFixture only\n")
             env["HC_TERMINAL_ID"] = caller if mode == "message" else ""
             if mode == "permission":
-                failure = subprocess.run([plugin, "--backend", "core", "--project", str(project)],
+                failure = subprocess.run([plugin, "core", "start", str(project)],
                                          env=env, text=True, capture_output=True, timeout=90)
                 assert failure.returncode != 0, failure.stdout
                 assert "blocked: permission" in failure.stderr and "attach" in failure.stderr, failure.stderr
                 before = receipts()
                 assert sum(before.get(str(root / ("receipt-" + mode + "-" + member)), 0)
                            for member in ["leader", "dev"]) == 1, before
-                status = invoke(project, "--status")
+                status = invoke(project, "status")
                 assert "Team startup: partial" in status and "blocked" in status, status
                 assert receipts() == before, "status answered a permission dialog"
                 print("PASS: permission blockage preserved, attach diagnostic, no automatic input")
@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
             before = receipts()
             assert all(before.get(str(root / ("receipt-" + mode + "-" + member))) == 1
                        for member in ["leader", "dev"]), before
-            status = invoke(project, "--status")
+            status = invoke(project, "status")
             assert "Team startup: ready" in status and "done" in status, status
             assert "Team ready" in invoke(project)
             assert len(terminals()) == len(live), "reuse created terminals"

@@ -22,7 +22,7 @@ npm test
 To verify against an installed real core, also install Python 3:
 
 ```sh
-npm run verify:core -- --core /absolute/path/to/herdr-core
+HERDR_CORE_BIN_PATH=/absolute/path/to/herdr-core npm run verify:core
 ```
 
 This command builds the TypeScript CLI and runs

@@ -22,7 +22,7 @@ import {
   teamDigest,
   startupPath,
   lock,
-  parseFlags,
+  parseCommand,
   markdown,
 } from '../bin/library.mjs';
 import { temporary, fixture, root } from './helpers.mjs';
@@ -60,14 +60,10 @@ test('bundle is standalone, with templates independent of cwd and repository', a
     binary = path.join(dir, 'herdr-team');
   await copyFile(path.join(root, 'bin/herdr-team'), binary);
   await chmod(binary, 0o755);
-  const listed = await exec(process.execPath, [binary, '--list-templates'], { cwd: dir });
+  const listed = await exec(process.execPath, [binary, 'templates'], { cwd: dir });
   assert.equal(listed.stdout, `${Object.keys(expected).sort().join('\n')}\n`);
-  await exec(
-    process.execPath,
-    [binary, '--init', '--template', 'router-worker', '--project', dir],
-    { cwd: dir },
-  );
-  const checked = await exec(process.execPath, [binary, '--check', '--project', dir], { cwd: dir });
+  await exec(process.execPath, [binary, 'init', dir, 'router-worker'], { cwd: dir });
+  const checked = await exec(process.execPath, [binary, 'check', dir], { cwd: dir });
   assert.match(checked.stdout, /members=3/);
 });
 test('custom templates override builtins, aliases preserve contents, source containment is rejected', async (t) => {
@@ -139,26 +135,46 @@ test('member validation rejects duplicate identities, escaping paths and NUL arg
   );
   await assert.rejects(loadTeam(f.project), /inside .team/);
 });
-test('CLI rejects incompatible options before starting a backend and honors explicit empty template directory', async (t) => {
+test('subcommands reject invalid syntax before connecting and preserve empty directory overrides', async () => {
   for (const args of [
-    ['--init', '--check'],
-    ['--status', '--list-templates'],
-    ['--template', 'minimal'],
-    ['--templates-dir', 'x'],
-    ['--backend', 'invalid'],
-    ['positional'],
-    ['--oops'],
+    ['unknown'],
+    ['start', '.', 'core'],
+    ['check', '.', 'extra'],
+    ['init', '.', 'minimal', '.', 'extra'],
+    ['templates', '.', 'extra'],
+    ['help', 'unknown'],
+    ['core', 'unknown'],
+    ['--init'],
+    ['start', '--project', '.'],
   ])
     await assert.rejects(run(args, {}));
   let output = '';
   await run(
-    ['--list-templates', '--templates-dir='],
+    ['templates', ''],
     { HERDR_TEAM_TEMPLATES_DIR: '/does-not-exist' },
     (text) => (output += text),
   );
   assert.equal(output, `${builtinTemplateNames().join('\n')}\n`);
-  assert.equal(parseFlags(['-init=false', '--project=a=b']).values.project, 'a=b');
-  assert.equal(parseFlags(['-init=false']).values.init, false);
+  assert.deepEqual(parseCommand(['core', 'start', 'project with spaces']), {
+    backend: 'core',
+    command: 'start',
+    project: 'project with spaces',
+    template: 'development',
+  });
+  assert.equal(parseCommand(['init', '.', 'router-worker']).template, 'router-worker');
+  assert.equal(parseCommand(['init']).template, 'development');
+  assert.equal(parseCommand([]).command, 'help');
+});
+test('bare invocation and help never start a backend or read a project', async () => {
+  for (const args of [[], ['help'], ['core'], ['herdr', 'help']]) {
+    let output = '';
+    await run(args, {}, (text) => (output += text));
+    assert.match(output, /Usage: herdr-team/);
+    assert.doesNotMatch(output, /--project|--init|--backend/);
+  }
+  let output = '';
+  await run(['help', 'init'], {}, (text) => (output += text));
+  assert.match(output, /init \[project\] \[template\]/);
 });
 test('startup identities and Go-compatible config digests remain deterministic', async (t) => {
   const { project } = await fixture(t),
@@ -226,4 +242,28 @@ test('custom YAML tags cannot silently become valid string fields', async (t) =>
     '---\nid: dev\nkind: !custom codex\nargs: []\n---\nRole',
   );
   await assert.rejects(loadTeam(f.project), /Unresolved tag/);
+});
+test('plugin-style init preserves Herdr project context when the project argument is empty', async (t) => {
+  const project = await temporary(t);
+  const env = {
+    HERDR_ENV: '1',
+    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ workspace_id: 'w1', workspace_cwd: project }),
+  };
+  await run(['init', '', 'fullstack'], env, () => {});
+  assert.equal((await loadTeam(project)).name, 'fullstack-team');
+});
+test('init and templates accept a positional custom template directory', async (t) => {
+  const templates = await temporary(t);
+  const named = path.join(templates, 'custom');
+  await mkdir(named);
+  await initFromTemplate(named, 'minimal');
+  const { rename } = await import('node:fs/promises');
+  const directory = await temporary(t);
+  await rename(path.join(named, '.team'), path.join(directory, 'custom'));
+  const project = await temporary(t);
+  await run(['init', project, 'custom', directory], {}, () => {});
+  assert.equal((await loadTeam(project)).name, 'minimal-team');
+  let output = '';
+  await run(['templates', directory], {}, (text) => (output += text));
+  assert.match(output, /^custom$/m);
 });

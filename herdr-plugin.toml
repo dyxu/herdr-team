@@ -15,34 +15,34 @@ command = ["npm", "run", "build"]
 id = "start-team"
 title = "Start project Herdr Team"
 contexts = ["workspace"]
-command = ["bin/herdr-team"]
+command = ["bin/herdr-team", "start"]
 
 [[actions]]
 id = "init-team"
 title = "Initialize project Herdr Team"
 contexts = ["workspace"]
-command = ["bin/herdr-team", "--init"]
+command = ["bin/herdr-team", "init"]
 
 [[actions]]
 id = "list-templates"
 title = "List Herdr Team templates"
 contexts = ["workspace"]
-command = ["bin/herdr-team", "--list-templates"]
+command = ["bin/herdr-team", "templates"]
 
 [[actions]]
 id = "init-fullstack"
 title = "Initialize project fullstack Herdr Team"
 contexts = ["workspace"]
-command = ["bin/herdr-team", "--init", "--template", "fullstack"]
+command = ["bin/herdr-team", "init", "", "fullstack"]
 
 [[actions]]
 id = "check-team"
 title = "Check project Herdr Team configuration"
 contexts = ["workspace"]
-command = ["bin/herdr-team", "--check"]
+command = ["bin/herdr-team", "check"]
 
 [[actions]]
 id = "status-team"
 title = "Show project Herdr Team status"
 contexts = ["workspace"]
-command = ["bin/herdr-team", "--status"]
+command = ["bin/herdr-team", "status"]

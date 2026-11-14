@@ -65,6 +65,8 @@ kind 和 args 是交给 Herdr 的启动配置。示例中的 codex 可以替换�
 
 `--init` 独立生成 `.team`，不启动团队。`--template` 默认 `development`，另提供 `minimal`、`product`、`fullstack`、`research`、`content`、`data-analysis`、`security`，覆盖小任务、产品交付、全栈开发、调研、内容、数据分析和安全审查；内置模板通过 Go embed 随二进制发布，模板名称从嵌入目录中发现并排序。模板结构与团队定义相同，用户可直接指定模板目录，或通过 `--templates-dir` / `HERDR_TEAM_TEMPLATES_DIR` 配置命名模板根目录。同名用户模板优先内置模板；模板内容保留，成员类型、参数、角色及团队规则通过 Markdown 配置。
 
+另提供 `router-worker`：一个 Router（`leader`）和两个通用 Worker，按任务端到端负责而非固定开发阶段分工。Router 维护原始请求与任务归属，协调共享目录中的写入范围；Worker 自主调查、实现、验证和处理反馈。设计依据、任务状态及运行时边界见 [Router / Worker 模板设计](docs/router-worker.md)。
+
 源模板按现有团队定义规则验证，拒绝符号链接和特殊文件。先在项目目录暂存完整结果，再安装为 `.team`；已有目标拒绝覆盖，失败清理暂存目录。`--list-templates` 列出可选模板，三个离线操作 `--init`、`--check`、`--list-templates` 互斥。Herdr 初始化 action 使用当前项目上下文，离线初始化使用当前目录或显式 `--project`。
 
 ## 团队启动

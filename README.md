@@ -37,7 +37,12 @@ project="/absolute/project/path"
 
 默认模板为 `development`；首次初始化时可加 `--template minimal` 创建两人团队，或选择其他模板。
 
+`--template router-worker` 创建一个 Router 和两个通用 Worker：Router 保留原始请求并协调任务归属与文件占用，Worker 自主完成调查、实现、验证和后续修复。适合多个独立任务；设计依据和共享目录下的适配见 [Router / Worker 模板设计](docs/router-worker.md)。
+
 ```sh
+# 使用 Router / Worker 模板初始化新团队
+"$team" --init --template router-worker --project "$project"
+
 # 查看可用模板
 "$team" --list-templates
 

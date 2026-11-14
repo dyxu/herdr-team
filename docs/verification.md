@@ -27,6 +27,8 @@ python3 scripts/verify-core.py --core /absolute/path/to/herdr-core
 
 已安装并登录交互式 Agent 后，可在独立测试项目中手动运行（会启动真实 Agent）：
 
+2026-11-14 对 `router-worker` 精简提示词进行了真实 Codex 测试（macOS、herdr-core 0.1.21、Codex 0.169.0）。使用专用 socket、独立 XDG/插件状态目录及临时 Python 项目，三个成员均按要求只回复角色就绪；状态查询与重复启动复用同一组终端通过。随后向 Router 下发两个需要修改同一 `helpers.py` 的独立需求（空白规范化与数值截断），计划验证分派、重叠写入协调及最终 unittest 验证。Router 调用 `herdr-core get` 时被其自身 Codex 沙箱阻止，申请提权后进入权限确认；未自动回答弹窗，两个 Worker 尚未收到开发任务。因此本次仅能确认真实初始化与复用通过，端到端协作仍待通信权限获准后继续，不能视为已通过。现场与画面记录保留在 `/private/tmp/herdr-rw-live-d_9h4xjz/`（临时目录，非长期归档）。
+
 ```sh
 plugin="$PWD/bin/herdr-team"
 test_project="$(mktemp -d)"

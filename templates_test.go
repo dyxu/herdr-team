@@ -55,6 +55,7 @@ var expectedBuiltinMembers = map[string][]string{
 	"content":       {"leader", "researcher", "writer", "editor"},
 	"data-analysis": {"leader", "data-engineer", "analyst", "reviewer"},
 	"security":      {"leader", "auditor", "developer", "reviewer"},
+	"router-worker": {"leader", "worker-a", "worker-b"},
 }
 
 func expectedTemplateList(extra ...string) string {

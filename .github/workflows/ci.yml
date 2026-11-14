@@ -9,26 +9,26 @@ permissions:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
         with:
-          go-version-file: go.mod
-          cache: true
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
       - name: Check formatting
-        run: test -z "$(gofmt -l *.go)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test with race detector
-        run: go test -race -coverprofile=coverage.out ./...
-      - name: Build
-        run: go build -o bin/herdr-team .
+        run: npm run format:check
+      - name: Typecheck
+        run: npm run check
+      - name: Test and build
+        run: npm test
       - name: Check built-in templates
         run: |
           project="$(mktemp -d)"

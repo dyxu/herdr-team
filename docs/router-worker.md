@@ -1,6 +1,6 @@
 # Router / Worker 模板设计
 
-新增内置模板 `router-worker`，包含一个 Router（成员 ID 沿用 `leader`）和两个对等的通用 Worker。适用于多个相对独立的需求、缺陷调查和持续返工；单个强耦合任务由一个 Worker 完整处理，不为并行而拆成多个技术阶段。
+内置模板 `router-worker`，包含一个 Router（成员 ID 沿用 `leader`）和两个对等的通用 Worker。适用于多个相对独立的需求、缺陷调查和持续返工；单个强耦合任务由一个 Worker 完整处理，不为并行而拆成多个技术阶段。
 
 ## 对 DeepSeek Super-agent 的理解
 
@@ -61,16 +61,43 @@ ID: T001
 
 用户补充“T001 还要兼容 Excel”，Router 记录原文并交给 worker-a 判断是否在原任务范围内。若 Worker 认为扩大范围，说明原因交回 Router 协调。实现 ready 后，可安排 worker-b 对冻结的 T001 成果只读复核，worker-a 处理问题；最终验证通过后由 Router 交付。
 
+## 可选通信检查
+
+`--template router-worker` 只选择团队职责，默认不触发通信探针。需要验证真实工具权限时，在初始化后的 `.team/team.md` frontmatter 中添加 `workflow: router-worker`，保留其他字段和正文：
+
+```yaml
+---
+name: router-worker-team
+workflow: router-worker
+leader: leader
+members:
+  - members/leader.md
+  - members/worker-a.md
+  - members/worker-b.md
+---
+```
+
+随后按通常方式启动团队。检查在角色初始化之后独立执行：
+
+1. Router 调用实际后端查询 Worker，启动器核对结果中的身份。
+2. 每个 Worker 查询 Router，并向它发送一次性 challenge。
+3. Router 收到匹配消息后写回执，启动器核对后记录 `communication_check: verified`，再保存团队 ready。
+
+检查失败时，启动阶段为 `checking communication`，状态为 partial，保留 `.team/.communication-*` 下的探针和证据。不会自动批准权限、修改沙箱或重发探针。若启动器已经退出，处理权限问题后仍需关闭该测试团队再启动；partial 不会自动续接。
+
+正在运行的团队不会因修改配置而获得新检查，未通过检查的旧 ready 团队也不会直接作为已验证团队复用。启用前先关闭旧团队，避免影响正在执行的任务。此能力检查的是查询与回传路径，不能证明任务调度、写入冲突协调和最终交付全部正确。
+
 ## 当前边界与验证
 
-本次只新增 Markdown 模板、使用说明和内置模板测试名单；无需修改启动器、后端或配置 schema。默认仍使用 Codex，不依赖 DeepSeek 模型、Harness 或其插件。
+运行时使用 TypeScript，CLI 需要 Node.js 22.13+。团队默认启动 Codex，不依赖 DeepSeek 模型、Harness 或其插件。实际任务的归属、文件范围和状态由 Agent 遵守，尚未实现派工版本校验、自动上下文切换或运行时任务归档。
 
 自动 GitHub/飞书监听、Thread 订阅、每任务独立 worktree、动态 Worker 会话、持久化事件队列及原型的准入策略都需要后续运行时工程，不属于本模板能力。
 
-现有 `TestBuiltinTemplates` 覆盖嵌入发现、初始化、成员解析和配置约定，CLI 可验证模板列举、初始化和 `--check`。提示词能否在真实 Agent 中稳定实现路由、范围交接和跨任务隔离，仍需实际团队会话验证。
+`test/config.test.mjs` 覆盖模板发现、初始化和成员解析；`test/communication.test.mjs` 使用模拟执行者覆盖通信检查成功与失败。真实 Agent 历史测试仅完成了初始化和复用，开发任务分派曾被通信权限阻塞；尚不能认定路由、范围交接、复核与最终交付已端到端通过。当前结果见[验证记录](verification.md#验证记录)。
 
 ```sh
-go build -o bin/herdr-team .
+npm ci
+npm run build
 bin/herdr-team --init --template router-worker --project /absolute/project/path
 bin/herdr-team --check --project /absolute/project/path
 bin/herdr-team --backend core --project /absolute/project/path

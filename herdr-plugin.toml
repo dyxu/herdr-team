@@ -6,7 +6,10 @@ description = "Initialize configurable team templates and start a Markdown-defin
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["go", "build", "-o", "bin/herdr-team", "."]
+command = ["npm", "ci", "--include=dev"]
+
+[[build]]
+command = ["npm", "run", "build"]
 
 [[actions]]
 id = "start-team"

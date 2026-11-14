@@ -1,0 +1,28 @@
+{
+  "name": "herdr-team",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Markdown-defined agent teams for herdr-core and Herdr",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "verify:core": "npm run build && python3 scripts/verify-core.py",
+    "verify:herdr": "npm run build && node scripts/verify-herdr.mjs",
+    "format": "prettier --write src test \"scripts/*.mjs\" package.json package-lock.json tsconfig.json .github/workflows/ci.yml",
+    "format:check": "prettier --check src test \"scripts/*.mjs\" package.json package-lock.json tsconfig.json .github/workflows/ci.yml"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "esbuild": "^0.25.12",
+    "prettier": "^3.10.1",
+    "typescript": "^5.9.3"
+  }
+}

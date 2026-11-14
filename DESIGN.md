@@ -1,20 +1,43 @@
-# Herdr Team 简化方案
+# Herdr Team 实现设计
 
-实现模板初始化 `.team`、在当前 Herdr 项目中按团队定义启动多个 Agent，以及由 Leader 通过 Herdr 协调成员完成开发任务。
+Herdr Team 使用 TypeScript 实现，通过 Markdown 定义团队，在同一个项目目录启动多个 Agent，由 Leader 使用运行后端提供的命令分派任务、读取结果并组织验证。
 
-## herdr-core 后端
+## 源码与构建
 
-`--backend core` 以官方 0.1.21 发布的 OpenRPC schema 为接口基准，通过 `herdr-core connect` 的 plain 模式交换逐行 JSON-RPC 2.0 请求与响应。校验响应版本、请求 ID 和结构化错误，不解析 CLI `run/ls` 的简略记录。`terminal.run/list/get` 返回完整终端结构，包含对象形式的 status 和 labels。默认自动选择：旧版 `HERDR_ENV=1` 使用 Herdr，否则使用 core。core 以当前目录或 `--project` 作为项目，无需工作区上下文；状态文件以 `server.status` 返回的永久 core ID 和项目路径隔离，不受调用终端变化影响。
+需要 Node.js 22.13+ 和 npm。`npm ci` 安装锁定依赖，`npm run build` 使用 esbuild 生成：
 
-启动前保存所有计划成员名，通过 `terminal.run` 的 `wait=false`、`no_parent=true`、`no_notify=true` 创建独立持久终端，并标记团队标签；Codex 添加 `--no-daemon`。使用 `terminal.wait` 等待 idle/done，再通过 `terminal.get` 核验终端地址、名称、目录和标签。就绪与启动稳定预算为 60 秒。
+| 产物 | 用途 |
+| --- | --- |
+| `bin/herdr-team` | 带 Node shebang 的 CLI bundle，含 YAML 解析器和全部内置模板 |
+| `bin/library.mjs` | 验证脚本与自动测试使用的模块 bundle |
 
-角色提示通过 `terminal.send` 投递。按官方 `first_message` 的处理，仅当结构化 RPC 错误精确匹配启动 settle 拒绝，且 hint 明确说明 `nothing was typed` 时，在总启动预算内以 100ms 退避重试；每次先重新等待就绪并核验终端身份与状态。blocked、身份变化、普通 unavailable、传输失败、缺少 turn 或取消/超时均不重试发送。提示成功投递一次，然后通过 `terminal.wait` 等待本轮结束。所有 send/wait 使用稳定 caller（当前 `HC_TERMINAL_ID`，否则 `ppid:<插件进程 ID>`），保证跨 connect 子进程仍跟踪相同发送轮次。message 和 timeout 是等待被打断或检查点，继续等待，不重发；发送后的总等待预算为 120 秒。即使 send 返回 started=false，也通过 wait 跟踪其后续处理，不将旧的 idle 状态当作完成。最终必须收到已结束的 idle/done status 结果。先初始化普通成员，再初始化 Leader，最终输出 attach 命令。
+CLI 可单独复制，运行时仍需 Node.js；无需另行复制 `node_modules`、`templates` 或 TypeScript 源码。修改模板后需要重新构建，已初始化项目中的 `.team` 不会自动更新。内置模板名称从构建时的模板目录发现并排序。
 
-初始化提示在正文前后明确限定本轮只回复 `<角色> ready.` 并结束，不调用工具、运行命令、检查项目、向 Leader 发就绪消息或监控终端。协作命令仅用于后续任务；成员汇报后结束本轮，不对 Leader 执行 wait。这样避免“等待任务”被解释为执行等待命令，从而产生初始化阶段的权限弹窗或提前唤醒 Leader。core 报告 blocked 时，查询完整 status.kind，显示权限/问题/认证原因和该终端的 attach 指引；不自动处理弹窗，也不重发已经送达的角色提示。
+| 文件 | 职责 |
+| --- | --- |
+| `src/main.ts` / `src/cli.ts` | 入口、参数解析、后端选择与离线操作 |
+| `src/config.ts` | frontmatter 校验、成员身份与路径检查 |
+| `src/templates.ts` | 模板发现、选择、校验及原子初始化 |
+| `src/process.ts` | argv 子进程、逐行 JSON-RPC、超时和退出回收 |
+| `src/core.ts` | herdr-core 启动、初始化、复用与状态查询 |
+| `src/legacy.ts` | 旧版 Herdr 窗格与 Agent 生命周期 |
+| `src/prompts.ts` | 后端专属的团队与角色提示词 |
+| `src/state.ts` | 状态路径、配置摘要、记录保存与目录锁 |
+| `src/communication.ts` | 可选的初始化后通信检查 |
+| `scripts/build.mjs` | 依赖及模板打包 |
+| `test/*.test.mjs` | Node 自动测试与官方 RPC 契约校验 |
 
-发布 schema 的 send.if 仅接受 idle/working，因此 idle 使用 `if=idle`，done 不发送非法条件值；两种情况下均保持 force=false，core 会拒绝向 blocked 对话框输入。done 的状态检查与发送不是原子的，初始化期间不应向成员另发指令。
+`scripts/verify-core.py` 保留为真实 core 的独立验证工具，使用时额外需要 Python 3；应用和默认测试不依赖 Python。`scripts/verify-herdr.mjs` 提供显式启用的真实 Herdr/Agent 集成验证。
 
-重复启动仅复用身份匹配的完整 ready 团队。启动响应丢失时可通过预先保存的名称和团队标签发现未记录地址的终端，阻止重复启动。部分失败保留终端与记录，不自动重发、不自动关闭。core 角色提示使用 get/send/wait/read，名单包含不可复用的终端地址，成员通过 send 向 Leader 地址汇报。状态查询只读取记录和终端状态，不发送消息或切换终端。旧版 Herdr 插件的标签页、窗格流程保持独立。官方 schema 快照存于 `testdata/herdr-core/`，用于独立校验测试中的实际 API 参数。
+## CLI 与后端选择
+
+`--backend auto` 为默认值：环境中 `HERDR_ENV=1` 时使用旧版 Herdr，其他情况使用 herdr-core。可通过 `--backend core` 或 `--backend herdr` 显式指定。
+
+`--init`、`--check`、`--list-templates`、`--status` 两两互斥。前三者是离线操作，不启动 Agent；`--status` 需要连接所选后端，查询已有记录和成员，不创建成员、投递提示、聚焦或关闭终端。
+
+- core 使用当前目录或 `--project` 作为项目，不要求工作区上下文。
+- 旧版 Herdr 要求 `HERDR_ENV=1` 及当前 workspace。项目目录依次取显式 `--project`、上下文中的 worktree、workspace 目录、pane 目录；必要时查询当前 pane。
+- `--template` 仅用于 `--init`。`--templates-dir` 仅用于 `--init` 或 `--list-templates`，显式参数优先于 `HERDR_TEAM_TEMPLATES_DIR`，显式空字符串可取消环境变量指定的目录。
 
 ## 团队定义
 
@@ -27,7 +50,7 @@
     reviewer.md
 ```
 
-team.md 使用 YAML frontmatter 描述成员，正文描述共同规则：
+团队文件包含 YAML frontmatter 和共同指令：
 
 ```markdown
 ---
@@ -38,14 +61,10 @@ members:
   - members/developer.md
   - members/reviewer.md
 ---
-# 团队规则
-所有成员在当前项目的同一个 worktree 中工作。
-由 Leader 分配任务、协调依赖、检查结果并组织最终验证。
-Leader 避免安排成员同时修改同一批文件；有重叠的任务按顺序执行。
-成员完成任务后报告修改、验证结果和未解决问题。
+所有成员共享项目目录，Leader 分派任务、协调重叠修改并组织最终验证。
 ```
 
-每个成员使用同一种格式，包括 Leader：
+成员文件使用相同格式，包括 Leader：
 
 ```markdown
 ---
@@ -53,76 +72,80 @@ id: developer
 kind: codex
 args: []
 ---
-# 开发成员
-根据 Leader 的指令修改代码并验证结果。
-在共享 worktree 中工作，只修改本次任务涉及的文件，完成后说明结果。
-不确定任务范围时，说明问题，等待 Leader 给出下一步指令。
+根据 Leader 分配的范围实现改动，验证后报告结果和未完成项。
 ```
 
-kind 和 args 是交给 Herdr 的启动配置。示例中的 codex 可以替换为其他 Herdr 支持的 Agent；插件不包含厂商专用逻辑。Agent 需要能执行 shell 命令，以使用 Herdr 协作。
+团队字段为 `name`、`leader`、`members` 和可选的 `workflow`；成员字段为 `id`、`kind`、`args`。拒绝未知字段、重复 YAML 键、自定义未解析标签及错误类型，不把数字或布尔值转换成字符串。`members`、`args` 必须是字符串数组。
+
+成员 ID 使用 1–20 个小写字母、数字、下划线或连字符，以字母开头，团队中不能重复；Leader 必须是实际成员。成员路径必须是 `.team` 内的 Markdown 文件，解析真实路径后仍需位于该目录。启动参数不能包含 NUL。
+
+`kind` 和 `args` 交给后端启动程序。core 使用 `/usr/bin/env <kind> ...args`，Codex 额外附加 `--no-daemon`；旧版 Herdr 使用其支持的 kind。Agent 需报告 OSC 7501 状态并保持交互运行，实际协作还需具备调用后端 CLI 的权限。
 
 ## 模板初始化
 
-`--init` 独立生成 `.team`，不启动团队。`--template` 默认 `development`，另提供 `minimal`、`product`、`fullstack`、`research`、`content`、`data-analysis`、`security`，覆盖小任务、产品交付、全栈开发、调研、内容、数据分析和安全审查；内置模板通过 Go embed 随二进制发布，模板名称从嵌入目录中发现并排序。模板结构与团队定义相同，用户可直接指定模板目录，或通过 `--templates-dir` / `HERDR_TEAM_TEMPLATES_DIR` 配置命名模板根目录。同名用户模板优先内置模板；模板内容保留，成员类型、参数、角色及团队规则通过 Markdown 配置。
+默认模板为 `development`，另提供 `minimal`、`product`、`fullstack`、`research`、`content`、`data-analysis`、`security` 和 `router-worker`。
 
-另提供 `router-worker`：一个 Router（`leader`）和两个通用 Worker，按任务端到端负责而非固定开发阶段分工。Router 维护原始请求与任务归属，协调共享目录中的写入范围；Worker 自主调查、实现、验证和处理反馈。设计依据、任务状态及运行时边界见 [Router / Worker 模板设计](docs/router-worker.md)。
+模板结构与 `.team` 相同，可指定内置名称、显式模板目录，或通过 `--templates-dir` / `HERDR_TEAM_TEMPLATES_DIR` 指定命名模板根目录。同名用户模板优先于内置模板；命名模板优先于同名相对目录，使用 `./NAME` 可明确选择本地目录。
 
-源模板按现有团队定义规则验证，拒绝符号链接和特殊文件。先在项目目录暂存完整结果，再安装为 `.team`；已有目标拒绝覆盖，失败清理暂存目录。`--list-templates` 列出可选模板，三个离线操作 `--init`、`--check`、`--list-templates` 互斥。Herdr 初始化 action 使用当前项目上下文，离线初始化使用当前目录或显式 `--project`。
+外部模板拒绝符号链接和特殊文件，源目录不能等于或包含目标项目。初始化先验证源配置，在项目内暂存并再次校验，独占预留 `.team` 后原子发布。已有 `.team` 拒绝覆盖；失败清理暂存目录。`--list-templates` 列出内置及有效的用户模板。
 
-## 团队启动
+Router/Worker 的职责、任务记录与共享目录规则见[模板设计](docs/router-worker.md)。
 
-插件 ID 为 `herdr-team`，提供初始化、启动、模板列表、配置检查和状态查询 actions；启动通过 `herdr plugin action invoke herdr-team.start-team` 调用，状态查询使用 `herdr-team.status-team`。Go module 和 CLI 名称为 `herdr-team`，二进制为 `bin/herdr-team`。
+## herdr-core 生命周期
 
-1. 从 Herdr 当前项目上下文取得项目目录，读取 `.team/team.md`。
-2. 检查成员定义、Leader 引用和本机 Herdr 支持的 kind；启动程序可用性由 Herdr 启动接口检查。
-3. 在当前项目的团队 tab 中创建成员 panes，全部使用当前项目目录，通过 `herdr agent start` 启动成员。
-4. 检查普通成员的身份、idle/done 状态与交互就绪情况。启动中或 idle/done 但暂不可交互的成员，每 250ms 重查，最多等待 30 秒；working、blocked、unknown 或身份变化立即拒绝。最多并行向 4 个成员发送团队规则、成员角色、成员名单、实际 Herdr 名称和共享工作区路径，输出逐成员进度。由协调流程逐成员保存结果；失败时收集已派出的其他成员结果。
-5. 全部普通成员成功后，同样检查 Leader 并发送包含额外协调说明的初始化提示。保存团队就绪状态，最后聚焦 Leader pane；聚焦失败保留就绪状态，允许下次启动重试聚焦。初始化程序退出。
+以仓库保存的官方 0.1.21 [OpenRPC schema](testdata/herdr-core/released.openrpc.json) 为协议基准，通过 `herdr-core connect` plain 模式交换逐行 JSON-RPC 2.0，不解析 CLI `run/ls` 的简略输出。
 
-Agent 的 Herdr 唯一名称带短团队实例前缀，避免不同项目同名；pane 名称设置为成员 ID（如 `leader`），pane ID 使用 Herdr 创建接口返回值。启动记录和 Herdr 协作命令仍使用 Agent 的完整名称（如 `t255aaa28-leader`）。初始化提示同时包含 Herdr 的协作命令说明。
+1. 调用 `server.status` 取得永久 core ID。启动记录按 core ID 和项目真实路径隔离，不受调用终端变化影响。
+2. 先保存所有计划成员名称，再用 `terminal.run` 创建终端：`wait=false`、`no_parent=true`、`no_notify=true`，附团队标签。
+3. 普通成员先初始化，Leader 最后初始化。每个成员先通过 `terminal.wait` 等待 idle/done，再用 `terminal.get` 核验地址、名称、目录、标签和 live 状态。就绪与 settle 重试共用 60 秒预算。
+4. 使用 `terminal.send` 投递角色提示，idle 时带 `if=idle`，done 时不发送不合法的 `if=done`，始终 `force=false`。
+5. 仅当结构化错误精确匹配启动 settle 拒绝、且 hint 明确为 `nothing was typed` 时，按 100ms 退避并重新验证身份后重试。普通 unavailable、身份变化、blocked、丢失响应、缺少 turn、超时或取消均不盲目重发。
+6. send 返回后以相同 caller 跟踪本轮 wait，总预算为 120 秒。`started=false` 不等于失败；message 和 timeout 是中断或检查点，继续等待同一轮。最终须为已结束的 idle/done。
+7. 全部角色初始化成功后，按配置执行可选通信检查，再保存 ready 并输出 attach 命令。
 
-Herdr 的 `prompt --wait` 不跟踪具体回合；提交前状态检查可以拒绝正在工作的成员，但不能消除检查与提交之间的外部输入竞态。初始化期间不应向成员另发指令。CLI 失败诊断保留结构化错误、stderr 和超时原因，命令上下文只包含命令和目标，不附加角色提示正文或启动参数。
+caller 使用 `HC_TERMINAL_ID`，未设置时为 `ppid:<启动器进程 ID>`，跨 connect 子进程保持稳定。每次 RPC 有 200 秒上限，并受调用方更短的总预算约束；校验版本、请求 ID、非空 result 和结构化错误，忽略合法通知。关闭 stdin 后等待 connect 退出，异常、超时和持有管道的后代进程不能无限阻塞启动器。
 
-Herdr 的 `agent start` 自身会等待交互就绪；插件的后置检查处理就绪状态短暂波动，不会重试启动或提示投递。Agent kind 从 `agent start --help` 的 `--kind` 选项段发现，支持换行、ANSI 和 CRLF，解析失败时提供客户端版本及排查命令，不猜测支持的类型。
+角色初始化本轮只回复 `<成员 ID> ready.` 并结束，不执行工具、读项目、分派任务、发送就绪消息或进入 wait 循环。通信与开发发生在后续回合。blocked 时读取 `status.kind` 并给出 attach 指引，不自动批准弹窗。
 
-初始化无需输入开发目标，团队就绪后直接在 Leader pane 中输入目标。插件不创建 worktree 或分支，所有成员使用当前项目已有的 worktree，包括其中已有的工作内容。
+只有身份匹配且完整 ready 的团队可复用。名称和团队标签也用于发现启动响应丢失的成员，阻止重复创建。部分失败保存 partial、阶段与错误，保留终端，不自动重启或重放提示。
 
-## 日常使用
+## 旧版 Herdr 生命周期
 
-用户向 Leader 发送自然语言指令，例如：
+插件 ID 为 `herdr-team`，要求 Herdr 0.9.3+。`herdr-plugin.toml` 的构建步骤依次执行 `npm ci --include=dev`、`npm run build`，action 继续调用 `bin/herdr-team`。
 
-> 实现登录功能，让 developer 开发、reviewer 评审，你负责协调和最终验证。
+1. 从当前 workspace 取得项目，校验配置并从 `agent start --help` 的 `--kind` 选项段发现支持的类型。支持换行、ANSI、CRLF；解析失败报告版本和排查命令。
+2. 创建团队 tab 和成员 panes，全部使用当前项目目录。每次保存后端返回的身份，再将 pane 命名为成员 ID。
+3. 使用带随机团队前缀的唯一名称启动 Agent，保留配置中的 kind 和 argv。
+4. 普通成员最多并行初始化 4 个。身份必须匹配且为可交互的 idle/done；starting、initializing 或暂不可交互的 idle/done 每 250ms 检查，最多 30 秒。working、blocked、未知状态及身份变化立即拒绝。
+5. 提示只投递一次并等待返回，失败后收集已派出的其他成员结果，串行保存成功标记；未发送的成员保持未初始化。普通成员全部成功后才初始化 Leader。
+6. 按配置执行通信检查，保存 ready 并聚焦 Leader。聚焦失败保留 ready，下次仅重试复用与聚焦。
 
-Leader 自主执行以下流程：
+`agent prompt --wait` 不跟踪唯一回合，get 与 prompt 也非原子操作，因此初始化期间不应从其他调用方发送任务。失败诊断保留结构化错误、stderr 和超时原因，命令标签不附带角色正文或敏感启动参数。
 
-1. 根据成员角色拆解任务，向对应成员发送目标、约束和验收要求。
-2. 修改文件互不重叠的任务先分别发送，再等待成员，形成并行执行；重叠任务按顺序安排。
-3. 使用 Herdr 查询状态、等待成员结束，并读取成员回复。
-4. 成员完成一个回合后给出结果或问题；Leader 检查实际回复，再决定评审、回答问题或继续分派。
-5. Leader 在共享 worktree 检查整体改动，运行最终验证并回复用户。提交代码等 Git 操作由 Leader 统一协调。
+## 日常协作与通信检查
 
-通信直接使用现有 Herdr 命令：
+所有成员共享当前 worktree，保留已有改动；重叠写入和 Git 操作由 Leader 协调。启动器不创建分支或 worktree。
 
-```sh
-herdr agent prompt <成员名称> "任务说明"
-herdr agent wait <成员名称> --until idle --until done --until blocked --timeout 120000
-herdr agent read <成员名称> --lines 120
-```
+| 操作 | herdr-core | 旧版 Herdr |
+| --- | --- | --- |
+| 查询 | `herdr-core get <terminal>` | `herdr agent get <name>` |
+| 分派 | `herdr-core send <terminal> '任务'` | `herdr agent prompt <name> '任务'` |
+| 等待 | `herdr-core wait <terminal> --timeout 120` | `herdr agent wait <name> --timeout 120000` |
+| 读取 | `herdr-core read <terminal> --lines 120` | `herdr agent read <name> --source recent-unwrapped --lines 120` |
+| 成员汇报 | 向 Leader 终端地址 send 报告，随后结束本轮 | 在成员会话中回复，由 Leader read 收集 |
 
-这些规则写入 Leader 的初始化提示：等待状态只表示一个回合结束，必须读取结果再判断任务是否完成；blocked 时读取问题并处理，需要用户输入则向用户说明；超时先检查状态和输出，不能直接重复分派。默认等成员可接收输入再发送下一条指令。
+使用启动提示中的实际二进制路径和成员地址；core 名单使用不可复用的终端地址，旧版 Herdr 使用带团队前缀的名称。idle/done 只表示回合结束，须读取实际结果后判断任务状态。超时先检查输出，不直接重复分派。
 
-成员直接在自己的 Agent 会话中回复，Leader 通过 Herdr 读取。长结果可以写成 Markdown 文件，回复绝对路径。无需成员主动向正在执行的 Leader 注入消息。
+在团队 frontmatter 设置 `workflow: router-worker` 可启用独立的初始化后通信检查，默认模板未启用。Router 实际查询 Worker，Worker 查询 Router 并向其发送一次性 challenge，Router 收到消息后写回执。启动器验证查询结果的身份及回执，成功后记录 `communication_check: verified`；失败时为 partial / checking communication，保留探针脚本和证据，不自动批准或重发。具体配置与限制见[通信检查说明](docs/router-worker.md#可选通信检查)。
 
-## 实现范围
+## 状态、并发与迁移
 
-插件只需 `herdr-plugin.toml` 和一个初始化程序。程序负责解析 Markdown、创建 panes、在同一项目目录启动 Agent、注入指令和聚焦 Leader；日常协作由 Leader 使用 Herdr 完成。
+状态目录优先取 `HERDR_PLUGIN_STATE_DIR`，默认沿用 `~/.local/state/herdr-agent-team`。记录保存项目、团队和成员身份、配置 SHA-256 摘要、启动阶段、错误及可选通信检查状态。`--status` 即使当前 `.team` 配置损坏，也可显示已有记录和后端状态。
 
-保留一份小的启动结果文件，记录项目目录、本次创建的成员名称和 pane，便于部分启动失败时说明已启动的成员。重复初始化发现当前项目已有存活团队时，聚焦已有 Leader，避免再次启动。
+配置变更只提示，不修改正在运行的团队。旧记录没有摘要时明确提示无法比较。原 Go 版本的记录路径和 JSON 格式保留，摘要也保留字段顺序、缺省 args 的 null 表示和 HTML 转义，已有配置无需转换；已用原 Go 产物创建的模拟团队验证跨版本复用。
 
-启动记录还保存有效团队配置的 SHA-256 摘要、最后启动阶段和错误。复用时比较角色正文、团队规则、kind 和 args 等有效配置，变更仅提示，不自动更新正在运行的团队。旧记录没有摘要时明确提示无法比较。`--status` 在当前 Herdr 上下文中只读查询记录、Agent 和 pane；即使当前配置损坏仍可诊断已有团队，不创建、聚焦或关闭窗格，也不发送提示。
+启动使用 `<记录文件>.lock.d` 原子目录锁，owner.json 保存 PID 与创建时间。正常结束在 finally 中释放，异常退出可能残留；恢复步骤见[验证指南](docs/verification.md#启动目录锁残留)。旧版 flock 与新目录锁不互通，迁移前需先结束旧版初始化进程。已有存活团队不等于仍有初始化进程，不能通过删除启动记录来代替排查。
 
-状态目录优先使用 `HERDR_PLUGIN_STATE_DIR`；未设置时保留历史兼容路径 `~/.local/state/herdr-agent-team`，避免仅 CLI 改名改变默认路径。插件 ID 或项目目录变化仍可能改变状态目录或记录键，不能保证识别旧团队；不自动迁移记录，再次启动前应检查并关闭旧团队。
+本项目负责配置、启动与交接，不提供日常任务数据库、可靠事件队列、后台调度器、动态扩容或自动崩溃恢复。任务索引与文件占用属于 Agent 协作约定，可选通信探针也不是消息队列或沙箱权限隔离。
 
-不实现后台控制器、任务数据库、消息队列、自定义通信协议、管理面板或自动恢复。第一版仅要求固定成员启动成功，并能在 Leader 的指挥下协作完成一次开发任务。
-
-初始依据为本机 Herdr 0.9.3 的 CLI 帮助，以及[插件文档](https://herdr.dev/docs/plugins/)和[Agent 自动化文档](https://herdr.dev/docs/agent-automation/)；兼容性解析已对照本机 Herdr 0.9.5 帮助验证。使用 Go 实现并编译为独立可执行文件，入口为 `main.go`，安装和使用见 README.md。真实环境验证步骤与范围见 [验证与故障排查](docs/verification.md)。
+安装与操作见 [README](README.md)，测试入口、验证范围和历史记录见[验证指南](docs/verification.md)。协议依据保留在[core schema 说明](testdata/herdr-core/README.md)及既有 Herdr CLI 兼容性测试中。

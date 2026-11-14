@@ -4,12 +4,13 @@
 
 ## 快速开始：herdr-core
 
-支持 macOS 和 Linux。需要 Go 1.23+、herdr-core（已验证 0.1.21），以及已安装并登录的 Agent CLI，默认使用 Codex。
+支持 macOS 和 Linux。需要 Node.js 22.13+、npm、herdr-core（已验证 0.1.21），以及已安装并登录的 Agent CLI，默认使用 Codex。
 
 在本仓库目录构建，指定要协作的项目：
 
 ```sh
-go build -o bin/herdr-team .
+npm ci
+npm run build
 team="$PWD/bin/herdr-team"
 project="/absolute/project/path"
 
@@ -20,13 +21,13 @@ project="/absolute/project/path"
 "$team" --backend core --project "$project"
 ```
 
-已有 `.team/` 时跳过 `--init`。在目标项目目录调用二进制时，可省略 `--project`。
+已有 `.team/` 时跳过 `--init`。在目标项目目录调用 CLI 时，可省略 `--project`。构建产物 `bin/herdr-team` 已包含依赖和全部内置模板，可单独复制使用；运行机器仍需 Node.js。
 
 等待输出 `Team ready`，执行输出中的 `herdr-core attach <leader-name>` 进入 Leader，然后描述任务，例如：
 
 > 实现登录功能，让 developer 开发、reviewer 评审，你负责协调和最终验证。
 
-初始化期间，成员只回复角色就绪；收到实际任务后才开始工作。再次启动会复用已有团队。
+角色初始化期间，成员只回复就绪；收到实际任务后才开始工作。再次启动会复用已有完整团队。默认初始化不验证 Agent 是否有权限调用团队通信命令；可为 router-worker 启用[独立通信检查](docs/router-worker.md#可选通信检查)。
 
 ## 配置与模板
 
@@ -60,17 +61,33 @@ project="/absolute/project/path"
 - **权限、登录或问题确认**：按报错中的 attach 命令进入对应终端手动处理。
 - **提示可能已送达**：先查看终端画面，不要盲目重发。
 - **上次团队启动不完整**：根据状态记录，只关闭该失败团队的终端后重试；不要只删除记录而保留旧终端。
+- **启动锁残留**：先确认对应初始化进程已退出，再按[恢复步骤](docs/verification.md#启动目录锁残留)处理该锁。
 
 ## 旧版 Herdr 插件
 
-需要 Git 和 Herdr 0.9.3+：
+需要 Node.js 22.13+、npm、Git 和 Herdr 0.9.3+：
 
 ```sh
 herdr plugin install dyxu/herdr-team
 ```
 
+插件安装时会执行 `npm ci --include=dev` 和 `npm run build`。
+
 在 Herdr 中选中目标项目，从 action palette 依次选择 **Initialize project Herdr Team** 和 **Start project Herdr Team**；已有 `.team/` 时跳过初始化。启动完成后向 Leader 描述任务。
 
 `--backend auto` 为默认值：旧版 Herdr 环境使用插件后端，其他环境使用 core。也可用 `--backend core` 或 `--backend herdr` 显式指定。
 
-详细配置见 [DESIGN.md](DESIGN.md)，验证流程和更多排查步骤见 [验证与故障排查](docs/verification.md)。
+## 开发与迁移
+
+在仓库根目录执行：
+
+```sh
+npm ci
+npm run format:check
+npm run check
+npm test
+```
+
+`npm test` 会先构建，再执行自动测试，不启动真实 Agent。TypeScript 版沿用原 `.team` 配置和启动记录，无需转换；升级时先结束旧版初始化进程，再构建和使用新版 CLI。
+
+实现结构与迁移细节见 [DESIGN.md](DESIGN.md)，真实后端验证、历史记录与故障处理见[验证指南](docs/verification.md)。

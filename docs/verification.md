@@ -1,89 +1,135 @@
 # 验证与故障排查
 
+以下命令均在仓库根目录执行。应用、构建和默认测试需要 Node.js 22.13+ 与 npm；真实 core 回归额外需要 Python 3 和已安装的 herdr-core。真实 Agent 测试还需要对应 CLI 已安装并登录。
+
 ## 自动检查
 
 ```sh
-go test -race -cover ./...
-go vet ./...
-go build -o bin/herdr-team .
+npm ci
+npm run format:check
+npm run check
+npm test
 ```
 
-GitHub Actions 在 macOS 和 Linux 上执行以上检查，并验证编译后二进制能列出模板、初始化和检查团队。CI 不启动真实 Agent，不需要厂商凭据。
+`npm test` 先构建 `bin/herdr-team` 和 `bin/library.mjs`，再运行 `test/*.test.mjs`。全部内置模板和 YAML 依赖打包在产物中，测试会把 CLI 复制到临时目录，验证其不依赖仓库位置或 `node_modules`。
 
-## herdr-core 验证
+| 测试文件 | 覆盖范围 |
+| --- | --- |
+| `test/config.test.mjs` | 模板发现、优先级、拒绝覆盖、外部模板检查、严格 YAML、成员边界、CLI 参数、摘要和目录锁 |
+| `test/core.test.mjs` | JSON-RPC 子进程、官方参数契约、初始化与复用、稳定 caller、settle 重试、消息打断、超时、权限和不确定投递 |
+| `test/legacy.test.mjs` | 旧版 Herdr 的项目上下文、kind 发现、并发初始化、部分失败保存、状态查询及聚焦重试 |
+| `test/communication.test.mjs` | 可选通信检查的正确、缺失、过期回执，错误身份、符号链接和失败状态 |
 
-自动测试通过独立 connect 子进程模拟官方 JSON-RPC 请求与完整 API 响应，并用仓库内保存的官方 0.1.21 发布 schema 校验实际请求参数。覆盖 idle/done 初始化、角色指令、Codex 参数、稳定 caller、状态查询、重复复用、配置变更、消息打断和 timeout 检查点后继续等待，启动 settle 拒绝后的安全重试、重试前 blocked/身份变化、重试预算，以及 blocked、启动响应丢失和发送失败后不重复启动或发送。send 返回 started=false 时仍等待同一轮处理。另覆盖错误响应、非法版本/ID、CLI 简略记录误入和总等待预算。初始化提示另验证所有角色在本轮禁止工具调用、发送就绪消息与执行 wait；模拟送达后 blocked:permission，检查 attach 诊断且无重发或 force。旧版 Herdr 测试继续运行。
+默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22 / 24 的组合，并检查构建后的模板列表、初始化和 `--check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
 
-真实 core 回归脚本不依赖 Agent 或厂商凭据：
+## 真实 herdr-core 回归
+
+此测试运行真实 core 和报告 OSC 7501 状态的 Python fixture，不启动 Codex 等 Agent，也不需要厂商凭据：
 
 ```sh
-go build -o bin/herdr-team .
+npm ci
+npm run verify:core
+
+# 指定 core 路径时使用：
+npm run verify:core -- --core /absolute/path/to/herdr-core
+```
+
+也可在已有构建产物时直接运行：
+
+```sh
 python3 scripts/verify-core.py --core /absolute/path/to/herdr-core
 ```
 
-脚本使用独立 socket、`HC_SESSION` 和临时 XDG 目录，运行报告 OSC 7501 状态的交互式 Python 测试程序。验证双成员团队在 idle/done 状态下初始化、角色提示各发送一次、状态查询和重复复用；通过先报告 idle、再持续输出 6.5 秒的 fixture 复现 core 的 5 秒 settle 拒绝，验证自动重试后每个角色只实际收到一次；通过向测试 caller 终端发送消息，验证真实 message 打断后继续等待且不重发。另模拟提示送达后报告 blocked:permission，确认状态为 partial、错误包含原因和 attach 指引、状态查询不会回答弹窗。结束时清理本次创建的终端与 core。2026-11-13 在 macOS、herdr-core 0.1.21 上全部通过；此验证未启动真实 Agent。
+脚本使用专用 socket、`HC_SESSION`、XDG 目录和临时项目，与用户已有 core 分开。验证以下场景后，清理本次 core 及终端：
 
-2026-11-13 另在本仓库的真实 `.team/` 配置下，以独立临时状态目录运行 `bin/herdr-team --backend core`，使用本机 herdr-core 0.1.21 和 Codex 0.169.0 启动 Leader、Developer、Reviewer。三个成员均完成初始化，分别只回复 `leader ready.`、`developer ready.`、`reviewer ready.`；读取画面未见额外工具调用或权限弹窗。Developer 的启动 settle 拒绝自动重试成功。随后 `--status` 和重复启动均通过，三个终端的地址与 turn=2 保持一致，没有新增成员或重发角色提示。本次仅验证启动、初始化、状态和复用，未分派实际开发任务。原失败团队保持不动，本次测试团队验证后单独清理。
+- idle / done 状态下初始化，查询状态并重复启动；每个角色仅实际接收一次提示。
+- 初始化后向 caller 发消息，验证 wait 被 message 打断后继续同一轮，不重发。
+- 先报告 idle，再持续输出 6.5 秒，复现 core 的 settle 拒绝，验证仅对 `nothing was typed` 安全重试。
+- 提示送达后报告 blocked:permission，验证启动记录为 partial，错误含 attach 指引，状态查询不自动回答弹窗。
 
-已安装并登录交互式 Agent 后，可在独立测试项目中手动运行（会启动真实 Agent）：
+## 真实 Agent 验证
 
-2026-11-14 对 `router-worker` 精简提示词进行了真实 Codex 测试（macOS、herdr-core 0.1.21、Codex 0.169.0）。使用专用 socket、独立 XDG/插件状态目录及临时 Python 项目，三个成员均按要求只回复角色就绪；状态查询与重复启动复用同一组终端通过。随后向 Router 下发两个需要修改同一 `helpers.py` 的独立需求（空白规范化与数值截断），计划验证分派、重叠写入协调及最终 unittest 验证。Router 调用 `herdr-core get` 时被其自身 Codex 沙箱阻止，申请提权后进入权限确认；未自动回答弹窗，两个 Worker 尚未收到开发任务。因此本次仅能确认真实初始化与复用通过，端到端协作仍待通信权限获准后继续，不能视为已通过。现场与画面记录保留在 `/private/tmp/herdr-rw-live-d_9h4xjz/`（临时目录，非长期归档）。
+### herdr-core 手动测试
+
+下面会启动两个真实 Agent，可能消耗额度。先构建，再在独立临时项目和状态目录中运行：
 
 ```sh
+npm run build
 plugin="$PWD/bin/herdr-team"
 test_project="$(mktemp -d)"
 test_state="$(mktemp -d)"
+
 "$plugin" --init --template minimal --project "$test_project"
 HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
 HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --status --project "$test_project"
 HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --backend core --project "$test_project"
 ```
 
-检查重复启动未新增终端或重发角色提示，按输出的 attach 命令进入 Leader。失败时用 `herdr-core get/read <name>` 检查，不自动处理授权，不盲目重发。结束后只对测试记录中的终端执行 kill/rm；不要停止或重启用户的 core。
+这些命令使用当前 core，独立的 `HERDR_PLUGIN_STATE_DIR` 只隔离插件记录。需要进一步隔离 core 时，应同时使用专用 socket、session 和 XDG 目录；现有 `verify-core.py` 展示了该配置方式，但它自身运行的是 fixture。
 
-## 真实 Herdr 验证
+检查重复启动未新增终端、未重发角色提示，再按输出的 attach 命令进入 Leader 并分派一个可验证的小任务。router-worker 可将初始化命令改为 `--template router-worker`，分派两个需要修改同一文件的任务，检查范围申报、串行写入、实际报告及最终验证。
 
-已登录 Agent 后，可在 Herdr 窗格中运行显式启用的集成测试：
+默认的角色 ready 仅证明初始化回合结束，不能证明团队通信权限可用。可按[模板说明](router-worker.md#可选通信检查)启用 `workflow: router-worker`，让启动器在角色初始化后独立验证查询和回执。此检查使用真实 Agent 执行工具，可能触发权限或登录确认；不会自动批准、修改沙箱或重复发送。
 
-```sh
-HERDR_TEAM_INTEGRATION=1 go test -run '^TestHerdrIntegration$' -count=1 -v -timeout 6m .
-```
+测试结束后只关闭启动记录中属于本次测试的终端，再清理临时项目和状态目录。不要停止用户已有 core，也不要只删除记录而留下运行成员。
 
-该测试会启动两个真实 Agent，可能产生 API 费用；创建独立临时项目与状态目录，检查正常启动、状态查询、重复启动与配置变更提示，结束时关闭本次创建的测试标签页并恢复调用方标签页。默认测试和 CI 跳过该用例。登录、仓库信任或权限提示不会被自动回答，遇到时测试会失败并输出诊断。
+### 旧版 Herdr 自动集成测试
 
-在 Herdr 管理的窗格中执行，使用独立的临时项目和状态目录，避免复用现有团队。下面的 `plugin` 指向刚编译的本仓库二进制。
+在已登录 Agent 的 Herdr 窗格中显式启用：
 
 ```sh
-plugin="$PWD/bin/herdr-team"
-test "${HERDR_ENV:-}" = 1
-herdr status server
-test_project="$(mktemp -d)"
-test_state="$(mktemp -d)"
-"$plugin" --init --template minimal --project "$test_project"
-HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --project "$test_project"
-HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" --status --project "$test_project"
+HERDR_TEAM_INTEGRATION=1 npm run verify:herdr
 ```
 
-不要在未登录或需要授权的对话框中自动回答。启动若被阻塞，检查测试团队的对应窗格，记录诊断与状态输出；由用户处理登录或授权。
+脚本要求 `HERDR_ENV=1`，创建独立临时项目和状态目录，启动 minimal 团队的两个真实 Agent，检查初始化、状态、重复复用和配置变更。结束时尝试关闭本次测试 tab 并恢复调用方 tab，清理失败时保留路径供检查。不会批准登录、信任或权限弹窗。
 
-| 场景 | 操作 | 验收 |
+未设置 `HERDR_TEAM_INTEGRATION=1` 时打印 skipped，默认 `npm test` 和 CI 也不会调用此真实测试入口。它验证启动生命周期，不代表已完成真实开发任务或 router-worker 的端到端协作。
+
+## 故障排查
+
+先运行对应后端的 `--status --project ...`，读取启动阶段、错误、成员身份及实际终端状态，再决定下一步。
+
+| 现象 | 处理方式 |
+| --- | --- |
+| 角色初始化成功，但首次分派失败 | 检查 Agent 自身是否能访问 core socket / Herdr CLI；ready 不等于通信权限已验证 |
+| blocked / 登录 / 权限 / 问题确认 | core 使用报错中的 attach 命令，旧版 Herdr 打开对应 pane，由用户处理 |
+| send 失败、超时或响应丢失 | 先 get/read 核实是否已送达，不直接重发 |
+| partial 且启动器已退出 | 检查保留的成员和错误；排查后关闭该团队，再启动，不自动续接未完成初始化 |
+| 配置变更 | 运行中的团队仍使用旧配置，关闭旧团队后启动才生效 |
+| 配置文件损坏 | 仍可用 `--status` 查询已有团队，再修复 `.team` |
+| 通信检查未通过 | 查看 `checking communication` 阶段和 `.team/.communication-*` 中保留的脚本与证据；待权限问题解决后按 partial 流程处理 |
+| Herdr kind 不支持或解析失败 | 查看 `herdr --version`、`herdr status server`、`herdr agent start --help`，核对 kind 和客户端兼容性 |
+
+启动器会保留错误现场；测试脚本各自的自动清理行为以对应章节为准。不要通过 `--force` 越过 blocked 对话框，也不要重启不属于本次测试的团队。
+
+### 启动目录锁残留
+
+TypeScript 版本使用 `<启动记录文件>.lock.d` 目录锁，正常结束自动释放。进程异常终止后可能留下锁，报错会给出锁目录；其中 `owner.json` 保存 PID 和创建时间。
+
+1. 用错误路径定位锁目录，读取 `owner.json`，核对该 PID 及项目相关初始化进程是否仍在运行。
+2. 如果仍有初始化进程，等待其完成或先处理其阻塞，不删除锁。
+3. 只有确认对应初始化进程已退出后，才手动删除这个锁目录。保留启动记录与团队终端，先 `--status` 诊断是否为 ready 或 partial，再决定是否重试。
+
+旧版 Go 使用 flock，与新目录锁不互通。升级到 TypeScript 版本前，先结束旧版初始化进程；已有完整 ready 团队的记录和配置无需转换。
+
+## 验证记录
+
+### TypeScript 迁移（2026-11-14）
+
+- 在 Node 22.23.5 上执行全部 61 项自动测试，通过；本机 Node 26.4.0 完成自动测试与配置校验回归，类型、格式和构建检查通过。
+- 用迁移前 Go CLI 创建模拟 core 团队，再用 TypeScript 版启动：复用同一记录和成员，配置摘要一致，没有重复创建或投递。摘要基准保存在自动测试中。
+- TypeScript CLI 对本机真实 herdr-core 0.1.21 执行 fixture 回归，idle、done、message、settling、permission 场景全部通过，独立 core 和终端已清理。
+- 本轮没有重新启动真实厂商 Agent，也未在本机执行 Linux 或 Node 24 验证；可选通信检查的真实 Agent 端到端结果仍待补充。
+
+### 历史记录：Go 版本
+
+以下记录发生在 TypeScript 迁移前，用于保留当时的验证范围，不作为新版的端到端验证结论。
+
+| 日期 | 环境与结果 | 范围 |
 | --- | --- | --- |
-| 正常启动 | 使用已安装、已登录的 Agent 启动 minimal 团队 | 显示初始化进度，普通成员完成后初始化 Leader，最终为 ready |
-| 重复启动 | 使用相同项目和状态目录再次运行 | 聚焦原 Leader，不新增团队或发送初始化提示 |
-| 配置变更 | 修改临时项目中的角色正文，再次运行 | 提示当前团队仍使用旧配置，不自动重启 |
-| 登录或权限阻塞 | 使用未登录的测试账号，或保留 Agent 的启动授权提示 | 报告失败与窗格处理建议，保留状态，不自动批准或重发 |
-| 部分失败后重启 | 存在测试成员窗格时再次启动 | 阻止创建重复团队；关闭测试团队窗格后可重新启动 |
-| 查询状态 | 运行 `--status` | 显示记录与实时状态，失败阶段及建议；不创建、聚焦或关闭窗格 |
+| 2026-11-03 | macOS、Herdr 客户端及服务端 0.9.5、Codex；真实集成测试通过，测试 tab 已清理 | 初始化、状态、重复复用、配置变更；权限等异常由模拟覆盖 |
+| 2026-11-13 | macOS、herdr-core 0.1.21；独立 fixture 回归通过并清理 | 初始化、settle 重试、消息打断、复用及权限阻塞；无真实 Agent |
+| 2026-11-13 | herdr-core 0.1.21、Codex 0.169.0；本仓库 Leader、Developer、Reviewer 就绪，turn=2 与终端身份在复用后不变 | 仅启动与复用，未分派开发任务；测试团队单独清理，原失败团队未改动 |
+| 2026-11-14 | herdr-core 0.1.21、Codex 0.169.0；router-worker 三成员初始化及复用通过，Router 首次 get Worker 被自身沙箱拦截，进入权限确认 | 两个 Worker 尚未收到同文件开发任务；未批准弹窗，协作未验证通过 |
 
-测试结束后，只关闭本次创建的测试团队标签页。确认测试进程已退出后删除临时项目与状态目录。不要关闭其他团队或删除其他项目的启动记录。
-
-## 本次验证记录（2026-11-03）
-
-在本机 macOS、Herdr 客户端及服务端 0.9.5、Codex 环境运行显式启用的集成测试，正常启动、状态查询、重复启动复用和配置变更提示均通过，测试标签页已清理。登录/授权阻塞、部分失败、身份变化与超时路径由自动化模拟测试覆盖，未在真实账号上主动制造登录失败。Linux 验证由新增 CI 执行，本次未在本机执行 Linux 任务。
-
-## 排查顺序
-
-1. 使用 **Show project Herdr Team status** 或 `--status` 查看失败阶段和成员状态。
-2. 对登录、权限或交互提示，进入对应成员窗格处理；不要直接重复提交角色提示。
-3. 需要重新初始化时，先关闭该团队的旧窗格，再启动；确认配置修改已生效。
-4. Herdr 兼容性报错时，查看 `herdr --version`、`herdr status server` 和 `herdr agent start --help`。客户端与服务端版本可能不同。
+最后一次真实 router-worker 测试当时将现场与画面保存到 `/private/tmp/herdr-rw-live-d_9h4xjz/`。这是临时路径，可能已被清理，不属于项目长期归档，也不保证对应终端仍在运行。

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonical, loadTeam } from './config.js';
 import { checkCommunication } from './communication.js';
+import { validateTerminal, object, text, flag } from './validation.js';
 import { coreCall, CoreRPCError } from './process.js';
 import { corePrompt, shellQuote } from './prompts.js';
 import {
@@ -46,8 +47,29 @@ export class Core {
   ) {
     this.caller = env.HC_TERMINAL_ID || `ppid:${process.pid}`;
   }
-  call<T>(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    return coreCall<T>(this.bin, this.env, method, params, signal);
+  async call<T>(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    const result = await coreCall<unknown>(this.bin, this.env, method, params, signal);
+    if (['terminal.get', 'terminal.run', 'terminal.kill'].includes(method))
+      validateTerminal(result);
+    if (method === 'server.status')
+      text(object(object(result, 'server.status').core, 'core').id, 'core.id');
+    if (method === 'terminal.wait') {
+      const value = object(result, 'terminal.wait');
+      text(value.terminal, 'wait.terminal');
+      text(value.status, 'wait.status', true);
+      text(value.reason, 'wait.reason');
+      flag(value.ended, 'wait.ended');
+      if (!Number.isSafeInteger(value.turn) || Number(value.turn) < 0)
+        throw new Error('terminal.wait has invalid turn');
+    }
+    if (method === 'terminal.send') {
+      const value = object(result, 'terminal.send');
+      if (!Number.isSafeInteger(value.turn) || Number(value.turn) < 0)
+        throw new Error(
+          'terminal.send response is missing or has invalid turn; delivery may have occurred',
+        );
+    }
+    return result as T;
   }
   async terminals(): Promise<CoreTerminal[]> {
     const result = await this.call<{ terminals: CoreTerminal[] }>('terminal.list', { all: true });
@@ -55,7 +77,7 @@ export class Core {
       throw new Error(
         'terminal.list response is missing terminals; refusing to infer that the previous team is gone',
       );
-    return result.terminals;
+    return result.terminals.map(validateTerminal);
   }
   async blockedError(terminal: string, signal?: AbortSignal): Promise<Error> {
     let kind = '',
@@ -174,6 +196,7 @@ export async function coreStatus(
     `Project: ${project}\nTeam startup: ${state.status}\nLast startup stage: ${state.stage}\nStartup record: ${file}\n`,
   );
   if (state.communication_check) out(`Communication check: ${state.communication_check}\n`);
+  if (state.communication_error) out(`Communication error: ${state.communication_error}\n`);
   if (state.error) out(`Startup error: ${state.error}\n`);
   try {
     reportConfigChange(out, state, await loadTeam(project));
@@ -295,7 +318,7 @@ export async function startCore(
         entry,
         project,
         state.leader_name,
-        corePrompt(team, m, state, c.bin),
+        corePrompt(team, m, state, c.bin, c.env.HERDR_TEAM_CLI_PATH),
         out,
       );
       entry.initialized = true;

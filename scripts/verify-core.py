@@ -72,8 +72,8 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
         # ls JSON is intentionally abbreviated; get returns the complete record.
         return [call("get", row["address"]) for row in call("ls", "--all")["terminals"]]
 
-    def invoke(project, command="start"):
-        result = subprocess.run([plugin, "core", command, str(project)],
+    def invoke(project, command="start", *arguments):
+        result = subprocess.run([plugin, "core", command, *arguments, str(project)],
                                 env=env, text=True, capture_output=True, timeout=90)
         if result.returncode:
             raise RuntimeError(result.stdout + result.stderr)
@@ -109,7 +109,11 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
                 status = invoke(project, "status")
                 assert "Team startup: partial" in status and "blocked" in status, status
                 assert receipts() == before, "status answered a permission dialog"
-                print("PASS: permission blockage preserved, attach diagnostic, no automatic input")
+                assert json.loads(invoke(project, "status", "json"))["startup"]["status"] == "partial"
+                invoke(project, "stop")
+                assert json.loads(invoke(project, "status", "json"))["startup"]["status"] == "stopped"
+                assert receipts() == before, "stop typed into a permission dialog"
+                print("PASS: permission blockage preserved, attach diagnostic, no automatic input, safe stop")
                 continue
             output = invoke(project)
             assert "Team ready" in output, output
@@ -127,10 +131,15 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
             assert len(terminals()) == len(live), "reuse created terminals"
             assert receipts() == before, "reuse or status resent a role"
             print("PASS:", mode, "initialization, status, reuse, one delivery per member")
-            for terminal in live:
-                if terminal["labels"].get("herdr-team"):
-                    call("kill", terminal["address"])
-                    call("rm", terminal["address"])
+            snapshot = json.loads(invoke(project, "status", "json"))
+            assert snapshot["startup"]["status"] == "ready"
+            assert all(member["matches"] for member in snapshot["members"])
+            owned = {terminal["address"] for terminal in live if terminal["labels"].get("herdr-team") == snapshot["startup"]["leader_name"]}
+            invoke(project, "stop")
+            assert not owned.intersection(terminal["address"] for terminal in terminals())
+            assert call("get", caller)["state"] == "live", "stop closed the unrelated caller"
+            assert receipts() == before, "stop or JSON status resent a role"
+            print("PASS:", mode, "JSON status and identity-scoped stop preserve unrelated caller")
     finally:
         env["HC_TERMINAL_ID"] = ""
         for terminal in terminals():

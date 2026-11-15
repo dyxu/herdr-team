@@ -87,6 +87,21 @@ lines.once('line', (line) => {
     }
     return emit({ terminal, ended, reason, status, turn: 1 });
   }
+  if (req.method === 'terminal.kill') {
+    if (mode === 'kill-failure') return fail('unavailable', 'kill response uncertain');
+    const entry = terminals.find((t) => t.address === terminal);
+    if (!entry) return fail('not_found', 'unknown terminal');
+    entry.state = 'finished';
+    entry.status = null;
+    fs.writeFileSync(file, JSON.stringify(terminals));
+    return emit(entry);
+  }
+  if (req.method === 'terminal.rm') {
+    const i = terminals.findIndex((t) => t.address === terminal);
+    if (i >= 0) terminals.splice(i, 1);
+    fs.writeFileSync(file, JSON.stringify(terminals));
+    return emit({ removed: true });
+  }
   if (req.method === 'terminal.send') {
     if (mode.startsWith('settle-') && (!settled || mode === 'settle-forever')) {
       fs.writeFileSync(path.join(root, `settle-${terminal}`), '');

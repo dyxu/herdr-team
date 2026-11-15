@@ -8,3 +8,8 @@ export * from './core.js';
 export * from './legacy.js';
 export type * from './types.js';
 export * from './communication.js';
+export * from './validation.js';
+export * from './runtime.js';
+export * from './management.js';
+export * from './locks.js';
+export * from './tasks.js';

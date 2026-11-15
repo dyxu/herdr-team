@@ -229,3 +229,26 @@ test('status can diagnose existing state even after team configuration becomes i
   assert.match(output, /Current configuration is invalid/);
   assert.match(output, /Team startup: ready/);
 });
+test('legacy Worker prompt cannot accidentally install the Leader role', async (t) => {
+  const { rolePrompt } = await import('../bin/library.mjs');
+  const f = await fixture(t),
+    team = await loadTeam(f.project);
+  const state = {
+    project: f.project,
+    leader_name: 'team-leader',
+    members: [
+      { id: 'leader', name: 'team-leader', pane_id: 'p1', terminal_id: 't1' },
+      { id: 'dev', name: 'team-dev', pane_id: 'p2', terminal_id: 't2' },
+    ],
+  };
+  const prompt = rolePrompt(
+    team,
+    team.members.find((m) => m.id === 'dev'),
+    state,
+    'herdr',
+    '/path with spaces/herdr-team',
+  );
+  assert.doesNotMatch(prompt, /You are the leader/);
+  assert.match(prompt, /leader reads your replies/);
+  assert.match(prompt, /herdr-team/);
+});

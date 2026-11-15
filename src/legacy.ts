@@ -3,6 +3,15 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonical, loadTeam, validKind } from './config.js';
 import { checkCommunication } from './communication.js';
+import {
+  agentList,
+  paneList,
+  agentMatches,
+  paneMatches,
+  object,
+  validateAgent,
+  validatePane,
+} from './validation.js';
 import { execute } from './process.js';
 import { rolePrompt } from './prompts.js';
 import {
@@ -67,7 +76,12 @@ export class Herdr implements LegacyClient {
       );
     if (!envelope.result || typeof envelope.result !== 'object')
       throw new Error(`Herdr ${args.slice(0, 2).join(' ')} response is missing result`);
-    return envelope.result as HerdrResult;
+    const result = object(envelope.result, 'Herdr result');
+    if (args[0] === 'agent' && args[1] === 'list') agentList(result);
+    if (args[0] === 'pane' && args[1] === 'list') paneList(result);
+    if (args[0] === 'agent' && args[1] === 'get') validateAgent(result.agent);
+    if (args[0] === 'pane' && ['get', 'split'].includes(args[1] || '')) validatePane(result.pane);
+    return result as HerdrResult;
   }
   async checkKinds(team: Team): Promise<void> {
     let supported: Set<string>;
@@ -221,14 +235,8 @@ export async function reuse(
   const result = await client.call(['agent', 'list']);
   const matched = new Map<string, Agent>();
   for (const m of state.members)
-    for (const agent of result.agents || []) {
-      if (
-        agent.name === m.name &&
-        agent.terminal_id === m.terminal_id &&
-        agent.workspace_id === workspace &&
-        agent.agent
-      )
-        matched.set(m.name, agent);
+    for (const agent of agentList(result)) {
+      if (agentMatches(agent, m, workspace)) matched.set(m.name, agent);
     }
   if (state.status === 'ready' && matched.size === state.members.length) {
     if (team.workflow === 'router-worker' && state.communication_check !== 'verified')
@@ -241,8 +249,12 @@ export async function reuse(
     out(`Existing team focused: ${state.leader_name}\n`);
     return true;
   }
-  const panes = (await client.call(['pane', 'list', '--workspace', workspace])).panes || [];
-  if (state.members.some((m) => panes.some((pane) => pane.terminal_id === m.terminal_id)))
+  const panes = paneList(await client.call(['pane', 'list', '--workspace', workspace]));
+  if (
+    state.members.some((m) =>
+      panes.some((pane) => pane.pane_id === m.pane_id || pane.terminal_id === m.terminal_id),
+    )
+  )
     throw new Error(
       `an incomplete or changed team still has live panes; inspect ${file} and close those team panes before restarting; no duplicate team was created`,
     );
@@ -254,6 +266,7 @@ export async function initializeMembers(
   file: string,
   client: LegacyClient,
   out: Output,
+  appCLI?: string,
 ): Promise<void> {
   const jobs = team.members.filter((m) => m.id !== team.leader);
   let next = 0,
@@ -271,7 +284,7 @@ export async function initializeMembers(
             client,
             entry,
             state.workspace_id,
-            rolePrompt(team, member, state, client.bin),
+            rolePrompt(team, member, state, client.bin, appCLI),
             30_000,
             250,
             (stage) => out(`${entry.name}: ${stage}…\n`),
@@ -297,7 +310,7 @@ export async function initializeMembers(
     client,
     entry,
     state.workspace_id,
-    rolePrompt(team, member, state, client.bin),
+    rolePrompt(team, member, state, client.bin, appCLI),
     30_000,
     250,
     (stage) => out(`${entry.name}: ${stage}…\n`),
@@ -319,6 +332,9 @@ export async function initialize(
   const file = startupPath(directory, project, workspace, env),
     unlock = await lock(`${file}.lock`);
   try {
+    const previous = await readState(file);
+    if (previous && (previous.project !== project || previous.workspace_id !== workspace))
+      throw new Error('startup record belongs to another project or workspace');
     if (await reuse(client, file, workspace, out, team)) return;
     await client.checkKinds(team);
     const prefix = `t${randomBytes(4).toString('hex')}`,
@@ -397,7 +413,7 @@ export async function initialize(
       }
       state.stage = 'initializing roles';
       await save(file, state);
-      await initializeMembers(team, state, file, client, out);
+      await initializeMembers(team, state, file, client, out, env.HERDR_TEAM_CLI_PATH);
       if (team.workflow === 'router-worker') {
         state.stage = 'checking communication';
         state.communication_check = 'pending';
@@ -453,6 +469,7 @@ export async function reportStatus(
   out(`Project: ${project}\nTeam startup: ${state.status}\nStartup record: ${file}\n`);
   if (state.stage) out(`Last startup stage: ${state.stage}\n`);
   if (state.communication_check) out(`Communication check: ${state.communication_check}\n`);
+  if (state.communication_error) out(`Communication error: ${state.communication_error}\n`);
   if (state.error) out(`Startup error: ${state.error}\n`);
   try {
     reportConfigChange(out, state, await loadTeam(project));
@@ -467,8 +484,8 @@ export async function reportStatus(
   }
   let agents: Agent[], panes: Pane[];
   try {
-    agents = (await client.call(['agent', 'list'])).agents || [];
-    panes = (await client.call(['pane', 'list', '--workspace', workspace])).panes || [];
+    agents = agentList(await client.call(['agent', 'list']));
+    panes = paneList(await client.call(['pane', 'list', '--workspace', workspace]));
   } catch (error) {
     recordedMembers(out, state);
     throw new Error(
@@ -477,17 +494,11 @@ export async function reportStatus(
   }
   out('Member\tStarted\tInitialized\tCurrent status\tInteractive ready\tPane\n');
   for (const m of state.members) {
-    let current = panes.some((p) => p.pane_id === m.pane_id && p.terminal_id === m.terminal_id)
-        ? 'pane only'
-        : 'missing',
+    let current = panes.some((p) => paneMatches(p, m)) ? 'pane only' : 'missing',
       ready = '-';
     for (const agent of agents) {
       if (agent.name !== m.name || agent.workspace_id !== workspace) continue;
-      if (
-        agent.pane_id !== m.pane_id ||
-        agent.terminal_id !== m.terminal_id ||
-        agent.agent !== m.kind
-      ) {
+      if (!agentMatches(agent, m, workspace)) {
         current = 'identity changed';
         continue;
       }

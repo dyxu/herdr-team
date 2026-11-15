@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { validateState } from './validation.js';
 import type { Env, Startup, Team, Output } from './types.js';
 
 export function isMissing(error: unknown): boolean {
@@ -9,10 +10,13 @@ export function isMissing(error: unknown): boolean {
 }
 export async function readState(file: string): Promise<Startup | undefined> {
   try {
-    return JSON.parse(await readFile(file, 'utf8')) as Startup;
+    return validateState(JSON.parse(await readFile(file, 'utf8')));
   } catch (error) {
     if (isMissing(error)) return;
-    throw error;
+    throw new Error(
+      `invalid startup record ${file}: ${(error as Error).message}; no team was started`,
+      { cause: error },
+    );
   }
 }
 export const startupDirectory = (env: Env): string =>
@@ -54,31 +58,7 @@ export async function save(file: string, state: Startup): Promise<void> {
   await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, file);
 }
-// Portable directory lock, independent of a native flock addon. A crash leaves
-// its owner record for deliberate recovery; never steal a potentially live lock.
-export async function lock(file: string): Promise<() => Promise<void>> {
-  const directory = `${file}.d`;
-  try {
-    await mkdir(directory, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
-      throw new Error(
-        `team initialization is already running or a lock needs inspection: ${directory}`,
-      );
-    throw error;
-  }
-  try {
-    await writeFile(
-      path.join(directory, 'owner.json'),
-      JSON.stringify({ pid: process.pid, created: new Date().toISOString() }),
-      { mode: 0o600 },
-    );
-  } catch (error) {
-    await rm(directory, { recursive: true, force: true });
-    throw error;
-  }
-  return () => rm(directory, { recursive: true, force: true });
-}
+export { lock } from './locks.js';
 export function reportConfigChange(out: Output, state: Startup, team: Team): void {
   if (!state.config_digest)
     out(
@@ -91,6 +71,7 @@ export function reportConfigChange(out: Output, state: Startup, team: Team): voi
 }
 export function newState(team: Team, project: string, workspace: string, prefix: string): Startup {
   return {
+    schema_version: 1,
     project,
     workspace_id: workspace,
     status: 'starting',

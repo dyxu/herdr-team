@@ -25,6 +25,8 @@ export interface StartedMember {
   initialized: boolean;
 }
 export interface Startup {
+  schema_version?: number;
+  communication_error?: string;
   communication_check?: string;
   config_digest?: string;
   stage: string;
@@ -38,7 +40,7 @@ export interface Startup {
 }
 export interface CoreTerminal {
   address: string;
-  name: string;
+  name?: string | null;
   cwd: string;
   state: string;
   labels: Record<string, string>;

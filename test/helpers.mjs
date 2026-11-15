@@ -82,6 +82,14 @@ export function fakeHerdr() {
       const command = args.slice(0, 2).join(' ');
       if (command === 'agent list') return { agents: client.agents };
       if (command === 'pane list') return { panes: client.panes };
+      if (command === 'pane get') return { pane: client.panes.find((p) => p.pane_id === args[2]) };
+      if (command === 'pane close') {
+        const pane = client.panes.find((p) => p.pane_id === args[2]);
+        client.panes = client.panes.filter((p) => p !== pane);
+        client.agents = client.agents.filter((a) => a.terminal_id !== pane?.terminal_id);
+        return {};
+      }
+
       if (command === 'agent get') {
         const agent = client.agents.find((agent) => agent.name === args[2]);
         return { agent: client.getAgent ? client.getAgent(agent) : agent };

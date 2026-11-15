@@ -1,10 +1,17 @@
 import type { Team, Member, Startup } from './types.js';
 export const shellQuote = (text: string): string => "'" + text.replaceAll("'", "'\"'\"'") + "'";
-export function corePrompt(team: Team, member: Member, state: Startup, binary: string): string {
+export function corePrompt(
+  team: Team,
+  member: Member,
+  state: Startup,
+  binary: string,
+  appCLI?: string,
+): string {
   const roster = state.members
     .map((m) => `- ${m.id}: ${m.name} (terminal ${m.terminal_id})\n`)
     .join('');
   const cli = shellQuote(binary);
+  const taskCLI = appCLI ? `${shellQuote(process.execPath)} ${shellQuote(appCLI)}` : 'herdr-team';
   const prompt = `You are member ${member.id} of team ${team.name}.
 This message installs your role only; it does not assign a task.
 INITIALIZATION: Do not call tools, run commands, inspect files, send messages, or invoke any wait command.
@@ -25,6 +32,7 @@ ${cli} get <terminal>
 ${cli} send <terminal> 'instructions'
 ${cli} wait <terminal> --timeout 120
 ${cli} read <terminal> --lines 120
+Task ledger CLI for future tasks only: ${taskCLI} task <action> (follow .team/protocol.md if provided).
 Use argv or proper shell quoting. Never interpolate untrusted text into shell code.
 Only send tasks to settled idle/done members. Do not use --force to bypass blocked dialogs.
 Use wait instead of sleep or polling. A timeout or not_started is not success; read before deciding and continue waiting without resending.
@@ -40,7 +48,7 @@ Then END YOUR TURN. Do not call any tools or run commands. Do not send a readine
   if (member.id === team.leader)
     return (
       prompt +
-      'After the user supplies a goal in a later message, act as leader: assign scoped tasks to members, collect results with read, arrange review and run final verification. Never wait on yourself.\n' +
+      'After the user supplies a goal in a later message, act as leader: assign scoped tasks to members, collect results with read, arrange review and final verification, then inspect actual results. Never wait on yourself.\n' +
       initialization
     );
   const leader = state.members.find((m) => m.id === team.leader)!;
@@ -50,9 +58,16 @@ Then END YOUR TURN. Do not call any tools or run commands. Do not send a readine
     initialization
   );
 }
-export function rolePrompt(team: Team, member: Member, state: Startup, binary: string): string {
+export function rolePrompt(
+  team: Team,
+  member: Member,
+  state: Startup,
+  binary: string,
+  appCLI?: string,
+): string {
   const roster = state.members.map((m) => `- ${m.id}: ${m.name} (pane ${m.pane_id})\n`).join('');
   const cli = shellQuote(binary);
+  const taskCLI = appCLI ? `${shellQuote(process.execPath)} ${shellQuote(appCLI)}` : 'herdr-team';
   const common = `You are member ${member.id} of team ${team.name}.
 Shared project/worktree: ${state.project}
 Leader: ${state.leader_name}
@@ -72,6 +87,7 @@ ${cli} agent get <name>
 ${cli} agent prompt <name> 'instructions' --wait --timeout 120000
 ${cli} agent wait <name> --timeout 120000
 ${cli} agent read <name> --source recent-unwrapped --lines 120
+Task ledger CLI for future tasks only: ${taskCLI} task <action> (follow .team/protocol.md if provided).
 Use argv or proper shell quoting for prompts. Do not interpolate untrusted text into shell code.
 idle/done mean a settled turn, not task success. Read the actual response.
 If blocked, inspect the dialog and ask the user for approvals; do not automatically approve.
@@ -80,7 +96,7 @@ On timeout/stalled, inspect state and output before retrying: input may already 
   return (
     common +
     (member.id === team.leader
-      ? "\nYou are the leader. Wait for the user's goal, then split and assign tasks.\nFor parallel work, prompt ready members without --wait first, then wait and read each.\nOnly send new tasks to idle/done, interactive-ready members. Never wait on yourself.\nConfirm working has started after non-waiting submission: an immediately idle member may not have processed it.\nSchedule overlapping file changes and dependent work sequentially.\nCollect results using agent read, answer questions, arrange reviews and fixes, then run final verification.\nCoordinate Git operations centrally. Do not create worktrees.\nIf a response is incomplete, ask the member to write a Markdown report and return its absolute path.\nFor initialization only, acknowledge the roster and wait for the user's goal; do not assign work yet.\n"
-      : "\nYou are the leader. Wait for the user's goal, then split and assign tasks.\nFor parallel work, prompt ready members without --wait first, then wait and read each.\nOnly send new tasks to idle/done, interactive-ready members. Never wait on yourself.\nConfirm working has started after non-waiting submission: an immediately idle member may not have processed it.\nSchedule overlapping file changes and dependent work sequentially.\nCollect results using agent read, answer questions, arrange reviews and fixes, then run final verification.\nCoordinate Git operations centrally. Do not create worktrees.\nIf a response is incomplete, ask the member to write a Markdown report and return its absolute path.\nFor initialization only, acknowledge the roster and wait for the user's goal; do not assign work yet.\n")
+      ? "\nYou are the leader. Wait for the user's goal, then split and assign tasks.\nFor parallel work, prompt ready members without --wait first, then wait and read each.\nOnly send new tasks to idle/done, interactive-ready members. Never wait on yourself.\nConfirm working has started after non-waiting submission: an immediately idle member may not have processed it.\nSchedule overlapping file changes and dependent work sequentially.\nCollect results using agent read, answer questions, arrange reviews and fixes, then arrange final verification and inspect its results.\nCoordinate Git operations centrally. Do not create worktrees.\nIf a response is incomplete, ask the member to write a Markdown report and return its absolute path.\nFor initialization only, acknowledge the roster and wait for the user's goal; do not assign work yet.\n"
+      : '\nFor initialization only, acknowledge your role and end the turn. Do not start editing.\nWhen assigned work, report changes, checks and unresolved questions in your own conversation.\nThe leader reads your replies through Herdr; do not interrupt the leader with completion prompts.\nAfter reporting, end your turn. Do not wait on the leader.\n')
   );
 }

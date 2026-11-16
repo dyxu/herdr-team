@@ -9,7 +9,7 @@
 3. 同一文件及其目录的范围不能与其他未完成任务重叠；ready 阶段仍保留范围供只读复核，done 后释放。Worker 的 ready 报告释放执行槽，但尚未通过最终验收。
 4. 明确属于当前任务的反馈用 `task feedback T001 <版本> <反馈文件>` 记录，忙碌时不重复投递；其他需求另建任务。反馈不会解除暂停。
 5. 改派前确认原 Worker 停止写入并完成交接。handoff JSON 包含 `summary`、`remaining`、`context_files` 和真实的 `worker_released: true`；运行 `task assign T001 <版本> worker-b <交接文件>`，将升级后的完整卡片交给新 Worker。working 状态不能直接改派或改范围，先收集 waiting/ready 等交接报告。
-6. 让另一空闲 Worker 按风险只读复核，或由负责 Worker 执行耗时集成验证。依据实际证据写最终 verification JSON（`summary`、`checks`、`remaining`）；只有检查全部 passed、无剩余项且当前 ready 报告已处理全部反馈，才 `task finish T001 <版本> <验证文件>`，随后 `task archive T001 <版本>`。
+6. 让另一空闲 Worker 按风险只读复核，或由负责 Worker 执行耗时集成验证。先运行 `task audit T001` 核对 Git 基线、实际变化和漏报；共享目录的范围外变化不能直接认定由当前 Worker 造成。没有 Git 基线或 HEAD 改变时人工检查实际 diff。依据实际证据写最终 verification JSON（`summary`、`checks`、`remaining`）；只有检查全部 passed、无剩余项且当前 ready 报告已处理全部反馈，才 `task finish T001 <版本> <验证文件>`，随后 `task archive T001 <版本>`。
 
 ## Worker
 
@@ -41,3 +41,5 @@ Router 先通知 Worker 停止写入，再 `task pause T001 <版本>`；暂停�
 `task list` 输出活动任务摘要，`task show T001` 展开完整卡片及最近报告，已归档任务仍可查看。旧手工 `.team/tasks.md` 在首次生成索引前保存到任务目录中的 legacy-index 文件。历史报告保留在 reports 子目录，不全部塞入启动提示或活动索引。
 
 控制记录由 CLI 原子写入并以任务目录锁串行更新；`task lock inspect` 可诊断，`task lock recover` 只恢复确认已退出的本机进程留下的锁。任务版本校验不是身份认证，元数据范围不是操作系统文件锁；实际文件编辑、消息投递和外部权限仍由 Agent 遵守团队规则。
+
+任务卡是权威数据，`tasks.md` 是派生索引。遇到 `index_warning` 时任务已经提交，不重放原操作；修复索引路径后用 `task reindex` 重建。`task show` 的 `last_report_current` 为 false 时只把 `historical_report` 当作历史背景，不当作当前交付。

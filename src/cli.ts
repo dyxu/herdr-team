@@ -5,6 +5,7 @@ import { openRuntime, statusSnapshot } from './runtime.js';
 import { runDoctor, verifyCommunication, stopTeam } from './management.js';
 import { parseTask, runTask, taskUsages } from './tasks.js';
 import { inspectLock, recoverLock } from './locks.js';
+import { parseRecord, runRecord, recordUsage } from './records.js';
 import { runCore } from './core.js';
 import { Herdr, resolveProject, runLegacy } from './legacy.js';
 import type { Env, Output } from './types.js';
@@ -20,8 +21,10 @@ type Command =
   | 'doctor'
   | 'stop'
   | 'lock'
-  | 'task';
+  | 'task'
+  | 'record';
 const usages: Record<Command, string> = {
+  record: recordUsage,
   init: 'init [project] [template] [templates-directory]',
   start: 'start [project]',
   status: 'status [json] [project]',
@@ -34,6 +37,8 @@ const usages: Record<Command, string> = {
   help: 'help [command]',
 };
 const descriptions: Record<Command, string> = {
+  record:
+    'Inspect startup history and locks offline; never connects to a backend. Live status is unknown.',
   task: Object.values(taskUsages).join('\n'),
   doctor: 'Diagnose configuration and backend; communication explicitly probes idle Agents.',
   stop: 'Stop only the recorded team after validating every live identity.',
@@ -55,6 +60,7 @@ Commands:
   stop [project]
   lock <inspect|recover> [project]
   task <action> [arguments]
+  ${recordUsage}
   check [project]
   templates [directory]
   help [command]
@@ -80,6 +86,7 @@ export interface ParsedCommand {
   action?: 'json' | 'communication' | 'inspect' | 'recover';
   taskAction?: string;
   taskArgs?: string[];
+  recordArgs?: string[];
 }
 export function parseCommand(args: string[]): ParsedCommand {
   if (args.some((arg) => arg.startsWith('-')))
@@ -92,6 +99,10 @@ export function parseCommand(args: string[]): ParsedCommand {
   if (!Object.hasOwn(usages, command))
     throw new Error(`unknown command ${JSON.stringify(command)}; run herdr-team help`);
   const name = command as Command;
+  if (name === 'record') {
+    parseRecord(remaining);
+    return { backend, command: name, project: '', template: 'development', recordArgs: remaining };
+  }
   if (name === 'task') {
     const task = parseTask(remaining);
     return {
@@ -153,6 +164,7 @@ export async function run(
     return;
   }
   const useCore = backend === 'core' || (backend === 'auto' && env.HERDR_ENV !== '1');
+  if (command === 'record') return runRecord(parsed.recordArgs!, env, out);
   const directory = parsed.directory ?? env.HERDR_TEAM_TEMPLATES_DIR ?? '';
   if (command === 'templates') {
     for (const name of await availableTemplateNames(directory)) out(`${name}\n`);

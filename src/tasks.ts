@@ -5,6 +5,8 @@ import { canonical, loadTeam, within, validID } from './config.js';
 import { lock, inspectLock, recoverLock } from './locks.js';
 import { object, text, array } from './validation.js';
 import type { Output } from './types.js';
+import { workspaceSnapshot, auditWorkspace } from './workspace.js';
+import type { WorkspaceSnapshot } from './workspace.js';
 
 const statuses = [
   'queued',
@@ -33,6 +35,7 @@ interface Report {
   seen_feedback: number;
 }
 export interface TaskCard {
+  workspace_baseline?: WorkspaceSnapshot;
   schema_version: 1;
   id: string;
   version: number;
@@ -112,6 +115,18 @@ function validateCard(value: unknown): TaskCard {
     throw new Error('invalid task state');
   strings(card.allowed_paths, 'task.allowed_paths').forEach(relative);
   strings(card.dependencies, 'task.dependencies').forEach(taskID);
+  if (card.workspace_baseline !== undefined) {
+    const baseline = object(card.workspace_baseline, 'workspace baseline');
+    if (typeof baseline.available !== 'boolean') throw new Error('invalid workspace baseline');
+    if (baseline.available) {
+      text(baseline.head, 'baseline.head');
+      for (const [file, hash] of Object.entries(object(baseline.files, 'baseline.files'))) {
+        relative(file);
+        if (hash !== null && (typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)))
+          throw new Error('invalid baseline file hash');
+      }
+    } else if (baseline.reason !== undefined) text(baseline.reason, 'baseline.reason');
+  }
   for (const key of ['created', 'updated']) text(card[key], `task.${key}`);
   for (const key of ['last_report', 'verification'])
     if (card[key] !== null) {
@@ -176,17 +191,24 @@ export class TaskStore {
         throw new Error('report pointer escapes task reports');
     return card;
   }
+  async report(card: TaskCard, pointer: string): Promise<Record<string, unknown>> {
+    const file = path.join(this.project, pointer);
+    if (!within(path.join(this.root, 'reports', card.id), await canonical(file)))
+      throw new Error('report pointer escapes task reports');
+    return object(await readData(file), 'report');
+  }
   async all(): Promise<TaskCard[]> {
+    let names: string[];
     try {
-      const names = await readdir(path.join(this.root, 'active'));
-      const cards = [];
-      for (const name of names.sort())
-        if (name.endsWith('.json')) cards.push(await this.read(name.slice(0, -5)));
-      return cards;
+      names = await readdir(path.join(this.root, 'active'));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
     }
+    const cards = [];
+    for (const name of names.sort())
+      if (name.endsWith('.json')) cards.push(await this.read(name.slice(0, -5)));
+    return cards;
   }
   async write(card: TaskCard) {
     card.updated = new Date().toISOString();
@@ -240,6 +262,14 @@ export class TaskStore {
     await writeFile(temp, content, { mode: 0o600 });
     await rename(temp, index);
   }
+  async refreshIndex(): Promise<string | null> {
+    try {
+      await this.index();
+      return null;
+    } catch (error) {
+      return `Task update committed; index refresh failed: ${(error as Error).message}. Do not repeat the mutation; fix the index path and run task reindex.`;
+    }
+  }
   check(card: TaskCard, expected: string) {
     if (card.version !== version(expected))
       throw new Error(`stale task version: expected ${card.version}, received ${expected}`);
@@ -255,6 +285,8 @@ export class TaskStore {
   }
 }
 export const taskUsages: Record<string, string> = {
+  audit: 'task audit <id> [project]',
+  reindex: 'task reindex [project]',
   list: 'task list [project]',
   show: 'task show <id> [project]',
   create: 'task create <id> <worker> <request-file> [project]',
@@ -269,6 +301,8 @@ export const taskUsages: Record<string, string> = {
   lock: 'task lock <inspect|recover> [project]',
 };
 const arity: Record<string, number> = {
+  audit: 1,
+  reindex: 0,
   list: 0,
   show: 1,
   create: 3,
@@ -312,6 +346,18 @@ export async function runTask(
 ): Promise<void> {
   project = await canonical(project || '.');
   const store = new TaskStore(project);
+  if (action === 'audit') {
+    const card = await store.readAny(args[0]!);
+    const report = card.last_report ? await store.report(card, card.last_report) : null;
+    const reported =
+      report?.version === card.version && report.worker === card.worker
+        ? strings(report.changed_files, 'report.changed_files')
+        : [];
+    out(
+      `${JSON.stringify(await auditWorkspace(project, card.workspace_baseline, card.allowed_paths, reported), null, 2)}\n`,
+    );
+    return;
+  }
   if (action === 'list') {
     out(
       `${JSON.stringify(
@@ -333,13 +379,25 @@ export async function runTask(
     const card = await store.readAny(args[0]!);
     let last_report: unknown = null;
     if (card.last_report) {
-      const target = path.join(project, card.last_report);
-      if (!within(path.join(store.root, 'reports', card.id), await canonical(target)))
-        throw new Error('report pointer escapes task reports');
-      last_report = await readData(target);
+      last_report = await store.report(card, card.last_report);
     }
+    const current =
+      !!last_report &&
+      (last_report as Report).version === card.version &&
+      (last_report as Report).worker === card.worker &&
+      (last_report as Report).seen_feedback === card.feedback.length;
     out(
-      `${JSON.stringify({ ...card, last_report_path: card.last_report, last_report }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          ...card,
+          last_report_path: card.last_report,
+          last_report_current: current,
+          last_report: current ? last_report : null,
+          historical_report: current ? null : last_report,
+        },
+        null,
+        2,
+      )}\n`,
     );
     return;
   }
@@ -352,6 +410,11 @@ export async function runTask(
   }
   const release = await lock(path.join(store.root, '.lock'));
   try {
+    if (action === 'reindex') {
+      await store.index();
+      out('Task index rebuilt.\n');
+      return;
+    }
     const id = taskID(args[0]!);
     let card: TaskCard;
     if (action === 'create') {
@@ -371,6 +434,7 @@ export async function runTask(
       const request = text(await readFile(source, 'utf8'), 'original request');
       const now = new Date().toISOString();
       card = {
+        workspace_baseline: await workspaceSnapshot(project),
         schema_version: 1,
         id,
         version: 1,
@@ -498,7 +562,7 @@ export async function runTask(
       } else if (action === 'finish') {
         if (card.paused || card.status !== 'ready' || !card.last_report)
           throw new Error('only an unpaused ready task can finish');
-        const previous = object(await readData(path.join(project, card.last_report)), 'report');
+        const previous = await store.report(card, card.last_report);
         if (previous.seen_feedback !== card.feedback.length)
           throw new Error('ready report has not acknowledged the latest feedback');
         if (previous.version !== card.version)
@@ -514,6 +578,12 @@ export async function runTask(
           throw new Error('final verification must pass without remaining work');
         card.verification = await store.reportFile(card, {
           ...proof,
+          workspace_audit: await auditWorkspace(
+            project,
+            card.workspace_baseline,
+            card.allowed_paths,
+            strings(previous.changed_files, 'report.changed_files'),
+          ),
           version: card.version,
           kind: 'final-verification',
         });
@@ -528,14 +598,16 @@ export async function runTask(
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
         await rename(store.file(id), store.file(id, true));
-        await store.index();
-        out(`Archived ${id}.\n`);
+        const warning = await store.refreshIndex();
+        out(`Archived ${id}.\n${warning ? `Warning: ${warning}\n` : ''}`);
         return;
       }
     }
     await store.write(card);
-    await store.index();
-    out(`${JSON.stringify(card, null, 2)}\n`);
+    const warning = await store.refreshIndex();
+    out(
+      `${JSON.stringify({ ...card, ...(warning ? { index_warning: warning } : {}) }, null, 2)}\n`,
+    );
   } finally {
     await release();
   }

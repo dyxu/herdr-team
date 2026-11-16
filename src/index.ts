@@ -13,3 +13,5 @@ export * from './runtime.js';
 export * from './management.js';
 export * from './locks.js';
 export * from './tasks.js';
+export * from './records.js';
+export * from './workspace.js';

@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, mkdir, symlink } from 'node:fs/promises';
+import { writeFile, readFile, readdir, mkdir, symlink, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { run, TaskStore, loadTeam } from '../bin/library.mjs';
-import { fixture } from './helpers.mjs';
+import { fixture, root } from './helpers.mjs';
 async function setup(t) {
   const f = await fixture(t);
   const request = path.join(f.directory, 'request.md');
@@ -33,6 +35,105 @@ const ready = {
   checks: [{ command: 'unit tests', result: 'passed' }],
   remaining: [],
 };
+test('competing CLI processes never lose committed feedback or leave the task locked', async (t) => {
+  const f = await setup(t);
+  await create(f);
+  const exec = promisify(execFile);
+  const inputs = await Promise.all(
+    Array.from({ length: 4 }, (_, i) => f.file(`feedback-${i}.md`, `feedback ${i}`)),
+  );
+  const results = await Promise.allSettled(
+    inputs.map((file) =>
+      exec(process.execPath, [
+        path.join(root, 'bin/herdr-team'),
+        'task',
+        'feedback',
+        'T001',
+        '2',
+        file,
+        f.project,
+      ]),
+    ),
+  );
+  const succeeded = results.filter((result) => result.status === 'fulfilled');
+  assert.ok(succeeded.length > 0);
+  for (const result of results)
+    if (result.status === 'rejected')
+      assert.match(result.reason.stderr, /already running|lock needs inspection/);
+  const card = await f.store.read('T001');
+  assert.equal(card.feedback.length, succeeded.length);
+  assert.equal(new Set(card.feedback.map((entry) => entry.text)).size, succeeded.length);
+  await f.command('feedback', 'T001', '2', await f.file('last.md', 'after contention'));
+  assert.equal((await f.store.read('T001')).feedback.length, succeeded.length + 1);
+});
+test('committed updates report index failures as warnings and can rebuild without replaying mutations', async (t) => {
+  const f = await setup(t);
+  await create(f);
+  const index = path.join(f.project, '.team/tasks.md');
+  await rm(index);
+  await mkdir(index);
+  const result = JSON.parse(
+    await f.command('feedback', 'T001', '2', await f.file('feedback.md', 'once')),
+  );
+  assert.match(result.index_warning, /committed.*Do not repeat/);
+  assert.equal((await f.store.read('T001')).feedback.length, 1);
+  await rm(index, { recursive: true });
+  await f.command('reindex');
+  assert.match(await readFile(index, 'utf8'), /T001/);
+  assert.equal((await f.store.read('T001')).feedback.length, 1);
+  const proof = await f.file('proof.json', {
+    summary: 'verified',
+    checks: ready.checks,
+    remaining: [],
+  });
+  await f.command(
+    'report',
+    'T001',
+    '2',
+    'dev',
+    await f.file('ready.json', { ...ready, seen_feedback: 1 }),
+  );
+  await f.command('finish', 'T001', '2', proof);
+  await rm(index);
+  await mkdir(index);
+  assert.match(await f.command('archive', 'T001', '2'), /Archived T001.*\nWarning:.*committed/);
+  assert.equal((await f.store.readAny('T001')).status, 'done');
+});
+test('show separates stale reports after feedback, scope changes and reassignment', async (t) => {
+  const f = await setup(t);
+  await create(f);
+  await f.command('report', 'T001', '2', 'dev', await f.file('ready.json', ready));
+  assert.equal(JSON.parse(await f.command('show', 'T001')).last_report_current, true);
+  await f.command('feedback', 'T001', '2', await f.file('feedback.md', 'new constraint'));
+  let shown = JSON.parse(await f.command('show', 'T001'));
+  assert.equal(shown.last_report, null);
+  assert.equal(shown.historical_report.version, 2);
+  await f.command(
+    'scope',
+    'T001',
+    '2',
+    await f.file('scope.json', { allowed_paths: ['helpers.py'] }),
+  );
+  shown = JSON.parse(await f.command('show', 'T001'));
+  assert.equal(shown.version, 3);
+  assert.equal(shown.last_report_current, false);
+  await f.command(
+    'assign',
+    'T001',
+    '3',
+    'dev',
+    await f.file('handoff.json', {
+      summary: 'released',
+      remaining: [],
+      context_files: [],
+      worker_released: true,
+    }),
+  );
+  shown = JSON.parse(await f.command('show', 'T001'));
+  assert.equal(shown.version, 4);
+  assert.equal(shown.last_report, null);
+  assert.equal(shown.historical_report.version, 2);
+});
 test('task lifecycle preserves source, validates reports and archives detailed history', async (t) => {
   const f = await setup(t),
     card = await create(f);

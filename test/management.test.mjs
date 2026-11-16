@@ -14,6 +14,8 @@ import {
   inspectLock,
   recoverLock,
   lock,
+  memberViews,
+  reportStatus,
 } from '../bin/library.mjs';
 import {
   coreFixture,
@@ -29,6 +31,40 @@ async function started(t) {
   await run(['core', 'start', f.project], f.env, () => {});
   return f;
 }
+test('offline records inspect history and recover a dead lock without contacting the backend', async (t) => {
+  const f = await started(t);
+  const file = path.join(
+    f.state,
+    (await readdir(f.state)).find((n) => n.endsWith('.json')),
+  );
+  const env = {
+    ...f.env,
+    HERDR_CORE_BIN_PATH: '/does-not-exist',
+    HERDR_ENV: '1',
+    HERDR_BIN_PATH: '/does-not-exist',
+  };
+  const command = async (...args) => {
+    let output = '';
+    await run(['record', ...args], env, (s) => (output += s));
+    return JSON.parse(output);
+  };
+  const before = await coreCalls(f.directory);
+  assert.equal((await command('list', f.project)).records[0].file, file);
+  assert.equal((await command('show', file)).live_status, 'unknown');
+  assert.equal((await command('lock', 'inspect', file)).exists, false);
+  const pid = spawnSync(process.execPath, ['-e', '']).pid;
+  await mkdir(`${file}.lock.d`);
+  await writeFile(
+    path.join(`${file}.lock.d`, 'owner.json'),
+    JSON.stringify({ pid, hostname: hostname(), created: new Date().toISOString(), token: 'dead' }),
+  );
+  assert.equal((await command('lock', 'recover', file)).recovered, true);
+  assert.deepEqual(await coreCalls(f.directory), before);
+  await assert.rejects(
+    command('lock', 'recover', path.join(f.directory, 'missing.json')),
+    /not found/,
+  );
+});
 test('status json is a single read-only document with recorded and live states', async (t) => {
   const f = await started(t),
     before = await coreCalls(f.directory);
@@ -65,6 +101,28 @@ test('doctor does not start or prompt Agents and does not infer login from execu
   const after = await coreCalls(f.directory);
   assert.equal(count(after, 'terminal.run'), count(before, 'terminal.run'));
   assert.equal(count(after, 'terminal.send'), count(before, 'terminal.send'));
+});
+test('doctor compares task ownership and pause metadata with live members', async (t) => {
+  const f = await started(t),
+    request = path.join(f.directory, 'request.md');
+  await writeFile(request, 'fixture task');
+  await writeFile(path.join(f.directory, 'codex'), '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+  const env = { ...f.env, PATH: `${f.directory}${path.delimiter}${f.env.PATH}` };
+  await run(['task', 'create', 'T001', 'dev', request, f.project], env, () => {});
+  await run(['task', 'pause', 'T001', '1', f.project], env, () => {});
+  let output = '';
+  await run(['doctor', f.project], env, (s) => (output += s));
+  assert.match(output, /SKIP task:T001: waiting \(paused\).*compare the actual output/);
+  const cardFile = path.join(f.project, '.team/tasks/active/T001.json');
+  const card = JSON.parse(await readFile(cardFile, 'utf8'));
+  card.worker = 'missing';
+  await writeFile(cardFile, JSON.stringify(card));
+  output = '';
+  await assert.rejects(
+    run(['doctor', f.project], env, (s) => (output += s)),
+    /doctor found problems/,
+  );
+  assert.match(output, /FAIL task:T001:.*worker=missing/);
 });
 test('doctor prints local diagnostics even if the backend is unavailable', async (t) => {
   const f = await fixture(t);
@@ -178,6 +236,30 @@ test('legacy stop refuses changed kind without closing any pane', async (t) => {
   );
   assert.equal(client.calls.filter((a) => a[1] === 'close').length, 0);
 });
+test('text and JSON member views both reject an agent whose pane identity changed', async (t) => {
+  const f = await fixture(t),
+    team = await loadTeam(f.project),
+    client = fakeHerdr();
+  await initialize(team, f.project, 'w1', f.state, {}, client, () => {});
+  const state = await readStartup(f.state),
+    member = state.members[0];
+  client.panes.find((p) => p.pane_id === member.pane_id).terminal_id = 'replaced';
+  const views = memberViews({ backend: 'herdr', project: f.project, workspace: 'w1' }, state, {
+    terminals: [],
+    agents: client.agents,
+    panes: client.panes,
+  });
+  assert.equal(views[0].current_status, 'identity changed');
+  let output = '';
+  await reportStatus(
+    client,
+    startupPath(f.state, f.project, 'w1'),
+    f.project,
+    'w1',
+    (s) => (output += s),
+  );
+  assert.match(output, /identity changed/);
+});
 test('lock diagnosis refuses live owners and only recovers a dead local owner', async (t) => {
   const dir = await temporary(t),
     file = path.join(dir, 'startup.lock'),
@@ -229,4 +311,33 @@ test('communication diagnosis refuses busy members without sending probes', asyn
     count(await coreCalls(f.directory), 'terminal.send'),
     count(before, 'terminal.send'),
   );
+});
+
+test('orphan locks and interrupted recovery guards produce explicit manual diagnostics', async (t) => {
+  const dir = await temporary(t),
+    file = path.join(dir, 'startup.lock');
+  await mkdir(`${file}.d`);
+  let report = await inspectLock(file);
+  assert.equal(report.manual_recovery_required, true);
+  assert.equal(report.can_recover, false);
+  await assert.rejects(recoverLock(file), /refusing/);
+  const pid = spawnSync(process.execPath, ['-e', '']).pid;
+  await mkdir(`${file}.recover.d`);
+  await writeFile(
+    path.join(`${file}.recover.d`, 'owner.json'),
+    JSON.stringify({
+      pid,
+      hostname: hostname(),
+      created: new Date().toISOString(),
+      token: 'guard',
+    }),
+  );
+  report = await inspectLock(file);
+  assert.equal(report.recovery_process, 'dead');
+  assert.equal(report.recovery_owner.token, 'guard');
+  assert.equal(report.manual_recovery_required, true);
+  await assert.rejects(lock(file), /recovery/);
+  await assert.rejects(recoverLock(file), /another lock recovery/);
+  await rm(path.join(`${file}.recover.d`, 'owner.json'));
+  assert.match((await inspectLock(file)).recovery_error, /ENOENT/);
 });

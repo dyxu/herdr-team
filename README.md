@@ -57,7 +57,14 @@ project="/absolute/project/path"
 | --- | --- |
 | `init [项目] [模板] [模板根目录]` | 创建 `.team`，默认模板为 development |
 | `start [项目]` | 启动或复用团队 |
-| `status [项目]` | 查询启动记录和实时成员状态 |
+| `status [json] [项目]` | 查询启动记录和实时成员状态，可输出 JSON |
+| `doctor [communication] [项目]` | 基本诊断，或显式验证空闲成员的通信权限 |
+| `stop [项目]` | 校验身份后停止记录中的团队，保留历史 |
+| `lock <inspect\|recover> [项目]` | 检查启动锁，恢复确认已退出的本机 owner |
+| `record list [项目]` | 离线列出项目启动记录 |
+| `record show <记录文件>` | 离线查看记录，实时状态未知 |
+| `record lock <inspect\|recover> <记录文件>` | 后端不可用时按明确记录路径诊断或恢复锁 |
+| `task <操作> ...` | 管理任务卡、范围、反馈、报告和验收，见[任务账本](docs/tasks.md) |
 | `check [项目]` | 离线校验团队配置 |
 | `templates [模板根目录]` | 离线列出模板 |
 | `help [命令]` | 查看帮助；无参数运行也显示帮助 |
@@ -74,7 +81,8 @@ project="/absolute/project/path"
 - **权限、登录或问题确认**：按报错中的 attach 命令进入对应终端手动处理。
 - **提示可能已送达**：先查看终端画面，不要盲目重发。
 - **上次团队启动不完整**：根据状态记录，只关闭该失败团队的终端后重试；不要只删除记录而保留旧终端。
-- **启动锁残留**：先确认对应初始化进程已退出，再按[恢复步骤](docs/verification.md#启动目录锁残留)处理该锁。
+- **启动锁残留**：先运行 `lock inspect`；后端不可用时使用 `record list` 和 `record lock inspect <记录文件>`。只对确认退出的本机 owner 使用 `recover`；缺失 owner 或残留 recovery guard 的处理见[恢复步骤](docs/verification.md#启动目录锁残留)。
+- **任务索引写入失败**：`index_warning` 表示任务卡已经提交，不要重放原操作。排除索引路径问题后执行 `task reindex`。
 
 ## 旧版 Herdr 插件
 

@@ -18,6 +18,9 @@ npm test
 | `test/config.test.mjs` | 模板发现、优先级、拒绝覆盖、外部模板检查、严格 YAML、成员边界、CLI 参数、摘要和目录锁 |
 | `test/core.test.mjs` | JSON-RPC 子进程、官方参数契约、初始化与复用、稳定 caller、settle 重试、消息打断、超时、权限和不确定投递 |
 | `test/legacy.test.mjs` | 旧版 Herdr 的项目上下文、kind 发现、并发初始化、部分失败保存、状态查询及聚焦重试 |
+| `test/tasks.test.mjs` | 任务生命周期、过期报告、索引失败与重建、真实子进程写入竞争 |
+| `test/workspace.test.mjs` | 临时 Git 仓库的已有改动、暂存、删除、新文件及验收核对证据 |
+| `test/management.test.mjs` | 离线记录、状态一致性、安全停止、锁及 recovery guard 诊断 |
 | `test/communication.test.mjs` | 可选通信检查的正确、缺失、过期回执，错误身份、符号链接和失败状态 |
 
 默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22 / 24 的组合，并检查构建后的模板列表、初始化和 `check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
@@ -106,11 +109,23 @@ HERDR_TEAM_INTEGRATION=1 npm run verify:herdr
 
 TypeScript 版本使用 `<启动记录文件>.lock.d` 目录锁，正常结束自动释放。进程异常终止后可能留下锁，报错会给出锁目录；其中 `owner.json` 保存 PID 和创建时间。
 
-1. 用错误路径定位锁目录，读取 `owner.json`，核对该 PID 及项目相关初始化进程是否仍在运行。
-2. 如果仍有初始化进程，等待其完成或先处理其阻塞，不删除锁。
-3. 只有确认对应初始化进程已退出后，才手动删除这个锁目录。保留启动记录与团队终端，先 `status` 诊断是否为 ready 或 partial，再决定是否重试。
+1. 优先使用 `lock inspect <项目>`。后端不可用时，`record list <项目>` 找到记录，再运行 `record lock inspect <记录文件>`。任务账本锁使用 `task lock inspect <项目>`。
+2. `owner` 的 hostname、PID、token 与 `process` 用于判断归属。确认本机进程已退出后，用对应的 `recover` 命令恢复；活进程、外部主机和无法验证的 owner 不会自动删除。
+3. `recovery_in_progress` 不只表示正在执行，也可能是上次恢复异常退出。检查 `recovery_directory`、`recovery_owner`、`recovery_process` 与 `recovery_error`。活着的恢复进程存在时不要操作。
+4. 如果 owner 缺失/损坏，或 recovery guard 残留，自动恢复会拒绝。先停止该项目所有启动、停止、通信诊断和锁恢复进程，确认没有新操作会并发启动。保留 owner、记录与日志副本后，人工将**错误指向的准确锁目录或 recovery guard 目录**重命名到隔离位置；不要删除整个状态目录。缺失 owner 不能只凭文件时间认定锁已失效。
+5. 再次 inspect 确认锁状态，检查成员实际输出，然后重试。任务暂停不是进程停止确认；不要用恢复锁代替停止实际写入。保留启动记录和终端，不要为了清锁清空团队历史。
 
-旧版 Go 使用 flock，与新目录锁不互通。升级到 TypeScript 版本前，先结束旧版初始化进程；已有完整 ready 团队的记录和配置无需转换。
+### 固定的真实 Agent 协作验收
+
+```sh
+HERDR_TEAM_INTEGRATION=1 npm run verify:agents
+```
+
+此入口使用专用 core socket、session、XDG 目录和临时项目，启动真实 Codex Router/Worker 团队，保留既有登录和审批设置。会使用模型额度；默认未显式启用时只输出 SKIP。
+
+固定场景覆盖双 Worker 并行、范围冲突拒绝、追加反馈、派工前暂停/恢复、已结束回合的任务改派、Leader 独立执行检查和最终归档。脚本充当确定性的 Router 驱动，验证实际 Worker 能读卡、编辑、执行检查和提交报告；它不证明自然语言 Router 的任意任务拆分可靠，也不测试执行中强制暂停。
+
+脚本独立断言文件内容与任务状态，不把 idle/done 当作成功。遇到登录或权限弹窗会失败，不自动批准或降低沙箱权限。失败保留临时目录、任务卡和终端输出，清理只针对专用 socket 上的测试终端；成功自动清理。不能把 SKIP 或初始化成功记为协作验收通过。
 
 ## 验证记录
 
@@ -131,12 +146,13 @@ TypeScript 版本使用 `<启动记录文件>.lock.d` 目录锁，正常结束�
 | 2026-11-13 | macOS、herdr-core 0.1.21；独立 fixture 回归通过并清理 | 初始化、settle 重试、消息打断、复用及权限阻塞；无真实 Agent |
 | 2026-11-13 | herdr-core 0.1.21、Codex 0.169.0；本仓库 Leader、Developer、Reviewer 就绪，turn=2 与终端身份在复用后不变 | 仅启动与复用，未分派开发任务；测试团队单独清理，原失败团队未改动 |
 | 2026-11-14 | herdr-core 0.1.21、Codex 0.169.0；router-worker 三成员初始化及复用通过，Router 首次 get Worker 被自身沙箱拦截，进入权限确认 | 两个 Worker 尚未收到同文件开发任务；未批准弹窗，协作未验证通过 |
+| 2026-11-16 | herdr-core 0.1.21 隔离回归通过；真实 Codex 三成员固定协作验收通过，覆盖并行、范围冲突、反馈、派工前暂停恢复、改派、独立验收和归档 | 确定性脚本驱动 Router 流程，未证明任意自然语言任务拆分或执行中强制暂停；测试成员和专用 core 已清理 |
 
 最后一次真实 router-worker 测试当时将现场与画面保存到 `/private/tmp/herdr-rw-live-d_9h4xjz/`。这是临时路径，可能已被清理，不属于项目长期归档，也不保证对应终端仍在运行。
 
 
 ### 子命令接口
 
-应用 CLI 使用 `init`、`start`、`status`、`check`、`templates`、`help`，后端用命令前的 `auto` / `core` / `herdr` 分组指定。旧双横杠操作参数会报错，不会触发后端；无参数运行只显示帮助。插件 action、CI 和真实 core 脚本均使用新接口。
+应用 CLI 使用 `init`、`start`、`status`、`doctor`、`stop`、`lock`、`record`、`task`、`check`、`templates`、`help`，后端用命令前的 `auto` / `core` / `herdr` 分组指定。旧双横杠操作参数会报错，不会触发后端；无参数运行只显示帮助。插件 action、CI 和真实 core 脚本均使用新接口。
 
 `test/config.test.mjs` 还检查位置参数、自定义模板根目录、空参数保留 Herdr 项目上下文及帮助的离线行为；core 测试覆盖显式分组和自动后端选择。验证脚本使用 `python3 scripts/verify-core.py [core路径] [CLI路径]`，core 路径缺省取 `HERDR_CORE_BIN_PATH` 或 `herdr-core`。

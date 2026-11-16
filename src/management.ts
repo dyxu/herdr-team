@@ -16,6 +16,7 @@ import {
   validateAgent,
 } from './validation.js';
 import type { Runtime, Inventory } from './runtime.js';
+import { TaskStore } from './tasks.js';
 import type { CoreTerminal, Env, Output, StartedMember, Startup } from './types.js';
 
 export async function executable(command: string, env: Env): Promise<string> {
@@ -71,6 +72,17 @@ export async function doctor(runtime: Runtime, env: Env, out: Output): Promise<v
         ok: m.matches && ['idle', 'done', 'working'].includes(m.current_status),
         detail: m.current_status,
       });
+    for (const task of await new TaskStore(runtime.project).all()) {
+      if (['done', 'dropped'].includes(task.status)) continue;
+      const member = report.members.find((member) => member.id === task.worker);
+      const settled = member && ['idle', 'done'].includes(member.current_status);
+      const uncertain = task.paused || (task.status === 'working' && settled);
+      checks.push({
+        name: `task:${task.id}`,
+        ok: !member || !member.matches ? false : uncertain ? null : true,
+        detail: `${task.status}${task.paused ? ' (paused)' : ''}; worker=${task.worker}; live=${member?.current_status || 'missing'}${uncertain ? '; compare the actual output before continuing; task metadata does not stop a terminal' : ''}`,
+      });
+    }
     const comm = report.startup?.communication_check;
     checks.push({
       name: 'agent communication',

@@ -83,8 +83,10 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
         return {str(path): path.read_text().count("delivered\n")
                 for path in root.glob("receipt-*")}
 
+    server_started = False
     try:
         call("server", "status")
+        server_started = True
         caller = call("run", "--bg", "--no-parent", "--no-notify", "--name", "verification-caller",
                       "--cwd", str(root), "--", "/usr/bin/env", "python3", str(program),
                       "working", str(root / "caller-receipts"), "", "")["address"]
@@ -141,11 +143,12 @@ with tempfile.TemporaryDirectory(prefix="ht", dir="/tmp") as temporary:
             assert receipts() == before, "stop or JSON status resent a role"
             print("PASS:", mode, "JSON status and identity-scoped stop preserve unrelated caller")
     finally:
-        env["HC_TERMINAL_ID"] = ""
-        for terminal in terminals():
-            # This socket and every terminal on it were created by this test.
-            if terminal["state"] == "live":
-                call("kill", terminal["address"])
-            call("rm", terminal["address"])
-        call("server", "stop")
-        print("Cleaned up the isolated verification core and terminals")
+        if server_started:
+            env["HC_TERMINAL_ID"] = ""
+            for terminal in terminals():
+                # This socket and every terminal on it were created by this test.
+                if terminal["state"] == "live":
+                    call("kill", terminal["address"])
+                call("rm", terminal["address"])
+            call("server", "stop")
+            print("Cleaned up the isolated verification core and terminals")

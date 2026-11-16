@@ -1,10 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { canonical, loadTeam } from './config.js';
-import { Core, coreMatches, coreStatusName } from './core.js';
+import { Core } from './core.js';
+import { memberViews, legacyInventory } from './member-views.js';
+import type { Inventory } from './member-views.js';
 import { Herdr, resolveProject } from './legacy.js';
 import { readState, startupDirectory, startupPath, teamDigest } from './state.js';
-import { agentList, paneList, agentMatches, paneMatches, text } from './validation.js';
-import type { Agent, CoreTerminal, Env, LegacyClient, Pane, Startup } from './types.js';
+import { text } from './validation.js';
+import type { Env, LegacyClient, Startup } from './types.js';
 
 export interface Runtime {
   backend: 'core' | 'herdr';
@@ -54,62 +56,11 @@ export async function runtimeState(runtime: Runtime): Promise<Startup | undefine
     throw new Error('startup record belongs to another project or backend');
   return state;
 }
-export interface Inventory {
-  terminals: CoreTerminal[];
-  agents: Agent[];
-  panes: Pane[];
-}
+export { memberViews } from './member-views.js';
+export type { Inventory } from './member-views.js';
 export async function inventory(runtime: Runtime): Promise<Inventory> {
   if (runtime.core) return { terminals: await runtime.core.terminals(), agents: [], panes: [] };
-  return {
-    terminals: [],
-    agents: agentList(await runtime.client!.call(['agent', 'list'])),
-    panes: paneList(await runtime.client!.call(['pane', 'list', '--workspace', runtime.workspace])),
-  };
-}
-export function memberViews(runtime: Runtime, state: Startup, live: Inventory) {
-  return state.members.map((member) => {
-    if (runtime.backend === 'core') {
-      const terminal = live.terminals.find(
-        (t) => t.address === member.terminal_id || t.name === member.name,
-      );
-      const matches =
-        !!terminal && coreMatches(terminal, member, runtime.project, state.leader_name);
-      return {
-        ...member,
-        matches,
-        current_status: terminal
-          ? matches
-            ? coreStatusName(terminal)
-            : 'identity changed'
-          : 'missing',
-        interactive_ready: null,
-      };
-    }
-    const agent = live.agents.find(
-      (a) => a.name === member.name || a.terminal_id === member.terminal_id,
-    );
-    const pane = live.panes.find(
-      (p) => p.pane_id === member.pane_id || p.terminal_id === member.terminal_id,
-    );
-    const matches =
-      !!agent &&
-      agentMatches(agent, member, runtime.workspace) &&
-      !!pane &&
-      paneMatches(pane, member);
-    return {
-      ...member,
-      matches,
-      current_status: agent
-        ? matches
-          ? agent.agent_status
-          : 'identity changed'
-        : pane
-          ? 'pane only'
-          : 'missing',
-      interactive_ready: agent?.interactive_ready ?? null,
-    };
-  });
+  return legacyInventory(runtime.client!, runtime.workspace);
 }
 export async function statusSnapshot(runtime: Runtime) {
   const startup = await runtimeState(runtime);

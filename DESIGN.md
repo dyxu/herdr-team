@@ -23,6 +23,10 @@ CLI 可单独复制，运行时仍需 Node.js；无需另行复制 `node_modules
 | `src/legacy.ts` | 旧版 Herdr 窗格与 Agent 生命周期 |
 | `src/prompts.ts` | 后端专属的团队与角色提示词 |
 | `src/state.ts` | 状态路径、配置摘要、记录保存与目录锁 |
+| `src/tasks.ts` / `src/workspace.ts` | 版本化任务账本、派生索引和辅助 Git 核对 |
+| `src/locks.ts` / `src/records.ts` | owner 锁与离线记录、恢复诊断 |
+| `src/member-views.ts` / `src/status.ts` | 跨后端共享的成员身份匹配和文本渲染 |
+| `src/runtime.ts` / `src/management.ts` | 后端运行上下文、JSON 状态、诊断和身份校验后停止 |
 | `src/communication.ts` | 可选的初始化后通信检查 |
 | `scripts/build.mjs` | 依赖及模板打包 |
 | `test/*.test.mjs` | Node 自动测试与官方 RPC 契约校验 |
@@ -37,7 +41,12 @@ CLI 使用 `herdr-team [auto|core|herdr] <命令> [位置参数]`，不提供旧
 | --- | --- |
 | `init [project] [template] [templates-directory]` | 离线创建 `.team`，模板默认 development |
 | `start [project]` | 启动或复用团队 |
-| `status [project]` | 连接后端查询记录和成员，不创建成员、投递提示、聚焦或关闭终端 |
+| `doctor [communication] [project]` | 基础诊断或显式通信探针 |
+| `stop [project]` | 完整身份预检后停止该团队，保留记录 |
+| `lock <inspect\|recover> [project]` | 在线定位当前启动锁 |
+| `record list/show/lock ...` | 按项目或明确记录路径离线诊断，不连接后端 |
+| `task <action> ...` | 任务账本与验收，见 [任务账本](docs/tasks.md) |
+| `status [json] [project]` | 连接后端查询记录和成员，不创建成员、投递提示、聚焦或关闭终端 |
 | `check [project]` | 离线验证团队配置 |
 | `templates [directory]` | 离线列出模板 |
 | `help [command]` | 显示全部或指定命令的帮助 |
@@ -157,6 +166,14 @@ caller 使用 `HC_TERMINAL_ID`，未设置时为 `ppid:<启动器进程 ID>`，�
 
 启动使用 `<记录文件>.lock.d` 原子目录锁，owner.json 保存 PID 与创建时间。正常结束在 finally 中释放，异常退出可能残留；恢复步骤见[验证指南](docs/verification.md#启动目录锁残留)。旧版 flock 与新目录锁不互通，迁移前需先结束旧版初始化进程。已有存活团队不等于仍有初始化进程，不能通过删除启动记录来代替排查。
 
-本项目负责配置、启动与交接，不提供日常任务数据库、可靠事件队列、后台调度器、动态扩容或自动崩溃恢复。任务索引与文件占用属于 Agent 协作约定，可选通信探针也不是消息队列或沙箱权限隔离。
+本项目提供配置、启动、交接和本地文件任务账本，不提供远程任务数据库、可靠消息队列、后台调度器、动态扩容或自动续接。任务卡由锁与版本校验保护，实际文件占用和执行仍需 Agent 遵守；通信探针不提供消息队列或沙箱隔离。
 
 安装与操作见 [README](README.md)，测试入口、验证范围和历史记录见[验证指南](docs/verification.md)。协议依据保留在[core schema 说明](testdata/herdr-core/README.md)及既有 Herdr CLI 兼容性测试中。
+
+## 任务持久化与一致性
+
+任务卡原子替换是提交点；`tasks.md` 是派生索引。索引失败不回滚已提交任务，而是返回明确警告；`task reindex` 可在任务锁内重建，避免用户重放反馈或改派。失去进程响应时仍需先读卡判断提交情况。
+
+任务版本、Worker 和反馈确认共同决定报告是否当前；历史报告继续保留但不会展示为当前报告。Git 基线与核对只提供共享目录的辅助证据，不证明作者或测试实际执行，也不代替最终冻结与人工审阅。
+
+成员身份与状态统一由 `memberViews` 解释，文本与 JSON 复用同一模型。后端专有启动、初始化和停止调用保持各自的协议边界，避免为了统一接口弱化安全检查。

@@ -58,6 +58,27 @@ function newOwner(): LockOwner {
 export async function inspectLock(file: string) {
   const directory = `${file}.d`,
     recovery = `${file}.recover.d`;
+  const recovery_in_progress = await exists(recovery);
+  let recovery_owner: LockOwner | null = null;
+  let recovery_process: 'alive' | 'dead' | 'unknown' = 'unknown';
+  let recovery_error: string | null = null;
+  if (recovery_in_progress) {
+    try {
+      recovery_owner = await owner(recovery);
+      recovery_process =
+        recovery_owner.hostname === hostname() ? alive(recovery_owner.pid) : 'unknown';
+    } catch (error) {
+      recovery_error = (error as Error).message;
+    }
+  }
+  const diagnostics = {
+    recovery_directory: recovery,
+    recovery_in_progress,
+    recovery_owner,
+    recovery_process,
+    recovery_error,
+    manual_recovery_required: recovery_in_progress && recovery_process !== 'alive',
+  };
   if (!(await exists(directory)))
     return {
       directory,
@@ -65,7 +86,8 @@ export async function inspectLock(file: string) {
       owner: null,
       process: 'unknown',
       can_recover: false,
-      recovery_in_progress: await exists(recovery),
+      error: null,
+      ...diagnostics,
     };
   try {
     const value = await owner(directory),
@@ -76,7 +98,8 @@ export async function inspectLock(file: string) {
       owner: value,
       process: status,
       can_recover: status === 'dead',
-      recovery_in_progress: await exists(recovery),
+      error: null,
+      ...diagnostics,
     };
   } catch (error) {
     return {
@@ -85,7 +108,8 @@ export async function inspectLock(file: string) {
       owner: null,
       process: 'unknown',
       can_recover: false,
-      recovery_in_progress: await exists(recovery),
+      ...diagnostics,
+      manual_recovery_required: true,
       error: (error as Error).message,
     };
   }

@@ -1,3 +1,5 @@
+import { coreStatusName, coreMatches, memberViews } from './member-views.js';
+import { statusHeader, statusRows } from './status.js';
 import { mkdir, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -18,18 +20,7 @@ import {
 } from './state.js';
 import type { Env, Output, Team, Startup, StartedMember, CoreTerminal, CoreWait } from './types.js';
 
-export const coreStatusName = (t: CoreTerminal): string =>
-  t.state !== 'live' ? t.state : t.status?.state || 'starting (no status report)';
-export const coreMatches = (
-  t: CoreTerminal,
-  m: StartedMember,
-  project: string,
-  token: string,
-): boolean =>
-  t.address === m.terminal_id &&
-  t.name === m.name &&
-  t.cwd === project &&
-  t.labels?.['herdr-team'] === token;
+export { coreStatusName, coreMatches } from './member-views.js';
 export function startupSendWasNotTyped(error: unknown, terminal: string): boolean {
   return (
     error instanceof CoreRPCError &&
@@ -192,17 +183,7 @@ export async function coreStatus(
   }
   if (state.project !== project || state.workspace_id !== workspace)
     throw new Error('core startup record belongs to another project or core');
-  out(
-    `Project: ${project}\nTeam startup: ${state.status}\nLast startup stage: ${state.stage}\nStartup record: ${file}\n`,
-  );
-  if (state.communication_check) out(`Communication check: ${state.communication_check}\n`);
-  if (state.communication_error) out(`Communication error: ${state.communication_error}\n`);
-  if (state.error) out(`Startup error: ${state.error}\n`);
-  try {
-    reportConfigChange(out, state, await loadTeam(project));
-  } catch (error) {
-    out(`Current configuration is invalid: ${(error as Error).message}\n`);
-  }
+  await statusHeader(state, file, project, out);
   let terminals: CoreTerminal[];
   try {
     terminals = await c.terminals();
@@ -210,13 +191,14 @@ export async function coreStatus(
     recordedMembers(out, state);
     throw error;
   }
-  out('Member\tStarted\tInitialized\tCurrent status\tTerminal\n');
-  for (const m of state.members) {
-    const terminal = terminals.find((t) => coreMatches(t, m, project, state.leader_name));
-    out(
-      `${m.name}\t${m.started}\t${m.initialized}\t${terminal ? coreStatusName(terminal) : 'missing or identity changed'}\t${m.terminal_id}\n`,
-    );
-  }
+  statusRows(
+    memberViews({ backend: 'core', project, workspace }, state, {
+      terminals,
+      agents: [],
+      panes: [],
+    }),
+    out,
+  );
   out(
     `Inspect members with ${shellQuote(c.bin)} get/read <terminal>; resolve dialogs before retrying.\n`,
   );

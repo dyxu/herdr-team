@@ -1,3 +1,5 @@
+import { memberViews, legacyInventory } from './member-views.js';
+import { statusHeader, statusRows } from './status.js';
 import { mkdir, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -460,59 +462,31 @@ export async function reportStatus(
   const state = await readState(file);
   if (!state) {
     out(
-      `No startup record for this project in the current Herdr session. Project: ${project}\nUse start-team to start a team.\n`,
+      `No startup record for this project in the current Herdr session. Project: ${project}\nUse herdr-team start to start a team.\n`,
     );
     return;
   }
   if (state.project !== project || state.workspace_id !== workspace)
     throw new Error(`startup record ${file} belongs to a different project or workspace`);
-  out(`Project: ${project}\nTeam startup: ${state.status}\nStartup record: ${file}\n`);
-  if (state.stage) out(`Last startup stage: ${state.stage}\n`);
-  if (state.communication_check) out(`Communication check: ${state.communication_check}\n`);
-  if (state.communication_error) out(`Communication error: ${state.communication_error}\n`);
-  if (state.error) out(`Startup error: ${state.error}\n`);
-  try {
-    reportConfigChange(out, state, await loadTeam(project));
-  } catch (error) {
-    out(`Current configuration is invalid: ${(error as Error).message}\n`);
-  }
+  await statusHeader(state, file, project, out);
   if (!state.members.length) {
     out(
       'No member pane identities were recorded. Inspect the workspace for panes created before the failure; resolve them before removing the startup record and retrying.\n',
     );
     return;
   }
-  let agents: Agent[], panes: Pane[];
   try {
-    agents = agentList(await client.call(['agent', 'list']));
-    panes = paneList(await client.call(['pane', 'list', '--workspace', workspace]));
+    const live = await legacyInventory(client, workspace);
+    statusRows(memberViews({ backend: 'herdr', project, workspace }, state, live), out);
   } catch (error) {
     recordedMembers(out, state);
     throw new Error(
       `cannot query live members; recorded startup details shown above: ${(error as Error).message}`,
     );
   }
-  out('Member\tStarted\tInitialized\tCurrent status\tInteractive ready\tPane\n');
-  for (const m of state.members) {
-    let current = panes.some((p) => paneMatches(p, m)) ? 'pane only' : 'missing',
-      ready = '-';
-    for (const agent of agents) {
-      if (agent.name !== m.name || agent.workspace_id !== workspace) continue;
-      if (!agentMatches(agent, m, workspace)) {
-        current = 'identity changed';
-        continue;
-      }
-      current = agent.agent_status;
-      ready = String(agent.interactive_ready);
-      break;
-    }
-    out(
-      `${m.id} (${m.name})\t${m.started}\t${m.initialized}\t${current}\t${ready}\t${m.pane_id}\n`,
-    );
-  }
   out(
     state.status !== 'ready'
-      ? 'Next: inspect member panes for login, permission prompts or errors. Partial teams are not resumed automatically; close their panes after inspection, then run start-team again. Never resend uncertain initialization prompts blindly.\n'
+      ? 'Next: inspect member panes for login, permission prompts or errors. Partial teams are not resumed automatically; close their panes after inspection, then run herdr-team start again. Never resend uncertain initialization prompts blindly.\n'
       : 'Next: send work to the leader. For blocked members, inspect their panes for questions or login prompts. If members are missing or replaced, close the remaining old team panes before starting again.\n',
   );
 }
@@ -524,7 +498,7 @@ export async function runLegacy(
 ): Promise<void> {
   if (env.HERDR_ENV !== '1')
     throw new Error(
-      'not running inside Herdr; invoke start-team or status-team from a Herdr project',
+      'not running inside Herdr; invoke herdr-team herdr start or status from a Herdr project',
     );
   const client = new Herdr(env.HERDR_BIN_PATH || 'herdr', env),
     resolved = await resolveProject(env, client, project),

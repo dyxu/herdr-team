@@ -11,6 +11,10 @@ Herdr Team 使用 TypeScript 实现，通过 Markdown 定义团队，在同一�
 | `bin/herdr-team` | 带 Node shebang 的 CLI bundle，含 YAML 解析器和全部内置模板 |
 | `bin/library.mjs` | 验证脚本与自动测试使用的模块 bundle |
 
+所有手写运行时源码、测试、fixture 和工具脚本均为 TypeScript。开发命令显式使用 Node 的 `--experimental-strip-types`（支持 Node 22.13+），无需额外 TS 执行器；该功能只移除类型，`npm run check` 才执行严格类型检查。`tsconfig.json` 覆盖 src、test 和 scripts，保留 strict 与 noUncheckedIndexedAccess。
+
+构建由 `scripts/build.ts` 启动 esbuild，并用 `tsconfig.build.json` 为 src 生成 `bin/types/` 声明及 `bin/library.d.mts` 入口。测试仍导入实际的 `bin/library.mjs`，由生成声明检查调用接口，不改为直接执行 src。`npm run check` 会先构建，因此干净 checkout 无需手工准备声明。生成的 JavaScript 和声明均位于被 Git 忽略的 bin 目录。
+
 CLI 可单独复制，运行时仍需 Node.js；无需另行复制 `node_modules`、`templates` 或 TypeScript 源码。修改模板后需要重新构建，已初始化项目中的 `.team` 不会自动更新。内置模板名称从构建时的模板目录发现并排序。
 
 | 文件 | 职责 |
@@ -28,10 +32,10 @@ CLI 可单独复制，运行时仍需 Node.js；无需另行复制 `node_modules
 | `src/member-views.ts` / `src/status.ts` | 跨后端共享的成员身份匹配和文本渲染 |
 | `src/runtime.ts` / `src/management.ts` | 后端运行上下文、JSON 状态、诊断和身份校验后停止 |
 | `src/communication.ts` | 可选的初始化后通信检查 |
-| `scripts/build.mjs` | 依赖及模板打包 |
-| `test/*.test.mjs` | Node 自动测试与官方 RPC 契约校验 |
+| `scripts/build.ts` | 依赖及模板打包 |
+| `test/*.test.ts` | Node 自动测试与官方 RPC 契约校验 |
 
-`scripts/verify-core.py` 保留为真实 core 的独立验证工具，使用时额外需要 Python 3；应用和默认测试不依赖 Python。`scripts/verify-herdr.mjs` 提供显式启用的真实 Herdr/Agent 集成验证。
+`scripts/verify-core.ts` 与 `scripts/core-fixture.ts` 使用 TypeScript/Node 执行真实 core 回归，不再依赖 Python。`scripts/verify-herdr.ts` 提供显式启用的真实 Herdr/Agent 集成验证。
 
 ## CLI 与后端选择
 

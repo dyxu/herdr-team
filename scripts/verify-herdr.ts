@@ -28,7 +28,7 @@ const env = { ...process.env },
   client = new Herdr(env.HERDR_BIN_PATH || 'herdr', env);
 const { workspace } = await resolveProject(env, client, project);
 const file = startupPath(directory, project, workspace, env);
-const out = (text) => process.stdout.write(text);
+const out = (text: string) => process.stdout.write(text);
 let cleaned = false;
 try {
   await initFromTemplate(project, 'minimal');
@@ -50,7 +50,7 @@ try {
   assert.match(output, /Existing team focused:/);
   assert.deepEqual(await readFile(file), before);
   await appendFile(
-    path.join(project, '.team', team.paths[0]),
+    path.join(project, '.team', team.paths[0]!),
     '\nIntegration verification configuration change.\n',
   );
   output = '';

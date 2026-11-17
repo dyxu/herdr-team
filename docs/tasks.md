@@ -14,7 +14,7 @@
 scope.json：
 
 ```json
-{"allowed_paths":["src/export.ts","test/export.test.mjs"],"dependencies":[]}
+{"allowed_paths":["src/export.ts","test/export.test.ts"],"dependencies":[]}
 ```
 
 report.json：
@@ -23,7 +23,7 @@ report.json：
 {
   "status":"ready",
   "summary":"修复导出编码",
-  "changed_files":["src/export.ts","test/export.test.mjs"],
+  "changed_files":["src/export.ts","test/export.test.ts"],
   "checks":[{"command":"实际执行的检查","result":"passed","details":"实际证据"}],
   "remaining":[],
   "seen_feedback":0

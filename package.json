@@ -8,14 +8,14 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "check": "tsc --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs",
-    "verify:core": "npm run build && python3 scripts/verify-core.py",
-    "verify:herdr": "npm run build && node scripts/verify-herdr.mjs",
-    "verify:agents": "npm run build && node scripts/verify-agents.mjs",
-    "format": "prettier --write src test \"scripts/*.mjs\" package.json package-lock.json tsconfig.json .github/workflows/ci.yml",
-    "format:check": "prettier --check src test \"scripts/*.mjs\" package.json package-lock.json tsconfig.json .github/workflows/ci.yml"
+    "build": "node --experimental-strip-types scripts/build.ts",
+    "check": "npm run build && tsc --noEmit",
+    "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
+    "verify:core": "npm run build && node --experimental-strip-types scripts/verify-core.ts",
+    "verify:herdr": "npm run build && node --experimental-strip-types scripts/verify-herdr.ts",
+    "verify:agents": "npm run build && node --experimental-strip-types scripts/verify-agents.ts",
+    "format": "prettier --write src test \"scripts/*.ts\" package.json package-lock.json \"tsconfig*.json\" .github/workflows/ci.yml",
+    "format:check": "prettier --check src test \"scripts/*.ts\" package.json package-lock.json \"tsconfig*.json\" .github/workflows/ci.yml"
   },
   "dependencies": {
     "yaml": "^2.8.1"

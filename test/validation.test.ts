@@ -11,14 +11,14 @@ import {
   paneList,
   validateState,
 } from '../bin/library.mjs';
-import { coreFixture, coreCalls, count, fixture, fakeHerdr, readStartup } from './helpers.mjs';
+import { coreFixture, coreCalls, count, fixture, fakeHerdr, readStartup } from './helpers.ts';
 for (const value of [null, false, 0, [], {}, { project: '/p', members: [] }])
   test(`invalid state ${JSON.stringify(value)} cannot launch another team`, async (t) => {
     const f = await coreFixture(t);
     await run(['core', 'start', f.project], f.env, () => {});
     const record = (await readdir(f.state)).find((n) => n.endsWith('.json'));
     const before = await coreCalls(f.directory);
-    await writeFile(path.join(f.state, record), JSON.stringify(value));
+    await writeFile(path.join(f.state, record!), JSON.stringify(value));
     await assert.rejects(
       run(['core', 'start', f.project], f.env, () => {}),
       /invalid startup record/,
@@ -47,13 +47,13 @@ for (const field of ['agents', 'panes'])
     );
     assert.equal(client.calls.filter((a) => a[1] === 'start').length, before);
   });
-for (const field of ['agent', 'pane_id'])
+for (const field of ['agent', 'pane_id'] as const)
   test(`legacy changed ${field} cannot reuse team`, async (t) => {
     const f = await fixture(t),
       team = await loadTeam(f.project),
       client = fakeHerdr();
     await initialize(team, f.project, 'w1', f.state, {}, client, () => {});
-    client.agents[1][field] = 'changed';
+    client.agents[1]![field] = 'changed';
     const before = client.calls.filter((a) => a[1] === 'start').length;
     await assert.rejects(
       initialize(team, f.project, 'w1', f.state, {}, client, () => {}),

@@ -1,3 +1,4 @@
+import type { RecordedCall } from './helpers.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -11,21 +12,34 @@ import {
   startupSendWasNotTyped,
   CoreRPCError,
 } from '../bin/library.mjs';
-import { coreFixture, coreCalls, count, readStartup, root } from './helpers.mjs';
+import { coreFixture, coreCalls, count, readStartup, root } from './helpers.ts';
 
-async function checkContract(calls) {
-  const schema = JSON.parse(
+interface Schema {
+  $ref?: string;
+  anyOf?: Schema[];
+  enum?: unknown[];
+  type?: string | string[];
+  items?: Schema;
+  additionalProperties?: boolean | Schema;
+}
+interface Contract {
+  components: { schemas: Record<string, Schema> };
+  methods: { name: string; params: { name: string; required?: boolean; schema: Schema }[] }[];
+}
+async function checkContract(calls: RecordedCall[]) {
+  const schema: Contract = JSON.parse(
     await readFile(path.join(root, 'testdata/herdr-core/released.openrpc.json'), 'utf8'),
   );
-  const check = (rule, value) => {
+  const check = (rule: Schema, value: unknown): boolean => {
     if (rule.$ref) {
-      let target = schema;
-      for (const part of rule.$ref.replace('#/', '').split('/')) target = target[part];
+      assert.ok(rule.$ref.startsWith('#/components/schemas/'));
+      const target = schema.components.schemas[rule.$ref.slice('#/components/schemas/'.length)];
+      assert.ok(target, 'referenced schema exists');
       return check(target, value);
     }
     if (rule.anyOf) return rule.anyOf.some((candidate) => check(candidate, value));
     if (rule.enum && !rule.enum.includes(value)) return false;
-    const type = (kind) =>
+    const type = (kind: string) =>
       kind === 'null'
         ? value === null
         : kind === 'array'
@@ -39,10 +53,18 @@ async function checkContract(calls) {
                 : typeof value === kind;
     if (rule.type && !(Array.isArray(rule.type) ? rule.type.some(type) : type(rule.type)))
       return false;
-    if (rule.items && !value.every((item) => check(rule.items, item))) return false;
+    if (
+      rule.items &&
+      (!Array.isArray(value) || !value.every((item: unknown) => check(rule.items!, item)))
+    )
+      return false;
     if (
       typeof rule.additionalProperties === 'object' &&
-      !Object.values(value).every((item) => check(rule.additionalProperties, item))
+      (!value ||
+        typeof value !== 'object' ||
+        !Object.values(value).every((item: unknown) =>
+          check(rule.additionalProperties as Schema, item),
+        ))
     )
       return false;
     return true;
@@ -88,9 +110,13 @@ for (const mode of ['idle', 'done', 'message', 'check-in', 'settle-once', 'notif
       assert.equal(req.params.wait, false);
       assert.equal(req.params.no_parent, true);
     }
-    const roles = sends.filter((req) => req.params.text.includes('member dev'));
+    const roles = sends.filter(
+      (req) => typeof req.params.text === 'string' && req.params.text.includes('member dev'),
+    );
     assert.ok(roles.length);
-    assert.ok(sends.at(-1).params.text.includes('member leader'));
+    const last = sends.at(-1);
+    assert.ok(last && typeof last.params.text === 'string');
+    assert.ok(last.params.text.includes('member leader'));
     if (mode === 'message') assert.match(output, /continuing the same turn/);
     output = '';
     await run(['core', 'status', f.project], f.env, (text) => (output += text));
@@ -163,11 +189,31 @@ test('initialization prompts retain no-tool guard and never start real work', as
   const f = await coreFixture(t),
     team = await loadTeam(f.project),
     state = {
+      status: 'ready',
+      stage: 'ready',
+      workspace_id: 'core:test',
+      tab_id: '',
       project: f.project,
       leader_name: 'team-leader',
       members: [
-        { id: 'leader', name: 'team-leader', terminal_id: 't1' },
-        { id: 'dev', name: 'team-dev', terminal_id: 't2' },
+        {
+          id: 'leader',
+          name: 'team-leader',
+          terminal_id: 't1',
+          pane_id: '',
+          kind: 'codex',
+          started: true,
+          initialized: true,
+        },
+        {
+          id: 'dev',
+          name: 'team-dev',
+          terminal_id: 't2',
+          pane_id: '',
+          kind: 'codex',
+          started: true,
+          initialized: true,
+        },
       ],
     };
   for (const m of team.members) {

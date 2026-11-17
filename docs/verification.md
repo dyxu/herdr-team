@@ -1,6 +1,6 @@
 # 验证与故障排查
 
-以下命令均在仓库根目录执行。应用、构建和默认测试需要 Node.js 22.13+ 与 npm；真实 core 回归额外需要 Python 3 和已安装的 herdr-core。真实 Agent 测试还需要对应 CLI 已安装并登录。
+以下命令均在仓库根目录执行。应用、构建和默认测试需要 Node.js 22.13+ 与 npm；真实 core 回归额外需要已安装的 herdr-core。真实 Agent 测试还需要对应 CLI 已安装并登录。
 
 ## 自动检查
 
@@ -11,23 +11,23 @@ npm run check
 npm test
 ```
 
-`npm test` 先构建 `bin/herdr-team` 和 `bin/library.mjs`，再运行 `test/*.test.mjs`。全部内置模板和 YAML 依赖打包在产物中，测试会把 CLI 复制到临时目录，验证其不依赖仓库位置或 `node_modules`。
+`npm test` 先构建 `bin/herdr-team` 和 `bin/library.mjs`，再通过 Node 显式类型剥离运行 `test/*.test.ts`。`npm run check` 同时检查 src、test、scripts，并使用生成声明检查对打包产物的调用。全部内置模板和 YAML 依赖打包在产物中，测试会把 CLI 复制到临时目录，验证其不依赖仓库位置或 `node_modules`。
 
 | 测试文件 | 覆盖范围 |
 | --- | --- |
-| `test/config.test.mjs` | 模板发现、优先级、拒绝覆盖、外部模板检查、严格 YAML、成员边界、CLI 参数、摘要和目录锁 |
-| `test/core.test.mjs` | JSON-RPC 子进程、官方参数契约、初始化与复用、稳定 caller、settle 重试、消息打断、超时、权限和不确定投递 |
-| `test/legacy.test.mjs` | 旧版 Herdr 的项目上下文、kind 发现、并发初始化、部分失败保存、状态查询及聚焦重试 |
-| `test/tasks.test.mjs` | 任务生命周期、过期报告、索引失败与重建、真实子进程写入竞争 |
-| `test/workspace.test.mjs` | 临时 Git 仓库的已有改动、暂存、删除、新文件及验收核对证据 |
-| `test/management.test.mjs` | 离线记录、状态一致性、安全停止、锁及 recovery guard 诊断 |
-| `test/communication.test.mjs` | 可选通信检查的正确、缺失、过期回执，错误身份、符号链接和失败状态 |
+| `test/config.test.ts` | 模板发现、优先级、拒绝覆盖、外部模板检查、严格 YAML、成员边界、CLI 参数、摘要和目录锁 |
+| `test/core.test.ts` | JSON-RPC 子进程、官方参数契约、初始化与复用、稳定 caller、settle 重试、消息打断、超时、权限和不确定投递 |
+| `test/legacy.test.ts` | 旧版 Herdr 的项目上下文、kind 发现、并发初始化、部分失败保存、状态查询及聚焦重试 |
+| `test/tasks.test.ts` | 任务生命周期、过期报告、索引失败与重建、真实子进程写入竞争 |
+| `test/workspace.test.ts` | 临时 Git 仓库的已有改动、暂存、删除、新文件及验收核对证据 |
+| `test/management.test.ts` | 离线记录、状态一致性、安全停止、锁及 recovery guard 诊断 |
+| `test/communication.test.ts` | 可选通信检查的正确、缺失、过期回执，错误身份、符号链接和失败状态 |
 
-默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22 / 24 的组合，并检查构建后的模板列表、初始化和 `check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
+默认测试使用模拟后端和执行者，不启动真实 Agent，不需要厂商凭据。GitHub Actions 配置了 macOS / Linux 与 Node 22.13.0、22、24 的组合，并检查构建后的模板列表、初始化和 `check`；配置 CI 矩阵不代表本机已经执行了 Linux 验证。
 
 ## 真实 herdr-core 回归
 
-此测试运行真实 core 和报告 OSC 7501 状态的 Python fixture，不启动 Codex 等 Agent，也不需要厂商凭据：
+此测试运行真实 core 和报告 OSC 7501 状态的 TypeScript/Node PTY fixture，不启动 Codex 等 Agent，也不需要厂商凭据：
 
 ```sh
 npm ci
@@ -40,7 +40,7 @@ HERDR_CORE_BIN_PATH=/absolute/path/to/herdr-core npm run verify:core
 也可在已有构建产物时直接运行：
 
 ```sh
-python3 scripts/verify-core.py /absolute/path/to/herdr-core
+node --experimental-strip-types scripts/verify-core.ts /absolute/path/to/herdr-core
 ```
 
 脚本使用专用 socket、`HC_SESSION`、XDG 目录和临时项目，与用户已有 core 分开。验证以下场景后，清理本次 core 及终端：
@@ -68,7 +68,7 @@ HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" core status "$test_project"
 HERDR_PLUGIN_STATE_DIR="$test_state" "$plugin" core start "$test_project"
 ```
 
-这些命令使用当前 core，独立的 `HERDR_PLUGIN_STATE_DIR` 只隔离插件记录。需要进一步隔离 core 时，应同时使用专用 socket、session 和 XDG 目录；现有 `verify-core.py` 展示了该配置方式，但它自身运行的是 fixture。
+这些命令使用当前 core，独立的 `HERDR_PLUGIN_STATE_DIR` 只隔离插件记录。需要进一步隔离 core 时，应同时使用专用 socket、session 和 XDG 目录；现有 `verify-core.ts` 展示了该配置方式，但它自身运行的是 fixture。
 
 检查重复启动未新增终端、未重发角色提示，再按输出的 attach 命令进入 Leader 并分派一个可验证的小任务。router-worker 可将初始化命令改为 `init "$test_project" router-worker`，分派两个需要修改同一文件的任务，检查范围申报、串行写入、实际报告及最终验证。
 
@@ -129,6 +129,14 @@ HERDR_TEAM_INTEGRATION=1 npm run verify:agents
 
 ## 验证记录
 
+### 全量 TypeScript 迁移（2026-11-17）
+
+- src、test、scripts 的全部手写程序均迁移为 TypeScript，严格类型检查覆盖三个目录；不通过关闭 strict 或忽略文件跳过错误。
+- 测试仍执行打包产物，构建同步生成对应声明。开发脚本和测试显式启用 Node 类型剥离，不增加执行器依赖。
+- macOS、Node 26.4.0 上 111 项测试通过，类型检查通过；真实 herdr-core 0.1.21 的 Node PTY fixture 覆盖 idle、done、message、settling、permission 全部通过，专用 core 和终端已清理。
+- Python 回归驱动及 PTY 程序均已移除，不再需要 Python。真实 Agent 集成入口的默认 SKIP 行为已核对，本轮未重新启动厂商 Agent。
+- CI 增加精确最低版本 Node 22.13.0；本轮尚未在本机执行该版本、Node 24 或 Linux。
+
 ### TypeScript 迁移（2026-11-14）
 
 - 在 Node 22.23.5 上执行全部 61 项自动测试，通过；本机 Node 26.4.0 完成自动测试与配置校验回归，类型、格式和构建检查通过。
@@ -155,4 +163,4 @@ HERDR_TEAM_INTEGRATION=1 npm run verify:agents
 
 应用 CLI 使用 `init`、`start`、`status`、`doctor`、`stop`、`lock`、`record`、`task`、`check`、`templates`、`help`，后端用命令前的 `auto` / `core` / `herdr` 分组指定。旧双横杠操作参数会报错，不会触发后端；无参数运行只显示帮助。插件 action、CI 和真实 core 脚本均使用新接口。
 
-`test/config.test.mjs` 还检查位置参数、自定义模板根目录、空参数保留 Herdr 项目上下文及帮助的离线行为；core 测试覆盖显式分组和自动后端选择。验证脚本使用 `python3 scripts/verify-core.py [core路径] [CLI路径]`，core 路径缺省取 `HERDR_CORE_BIN_PATH` 或 `herdr-core`。
+`test/config.test.ts` 还检查位置参数、自定义模板根目录、空参数保留 Herdr 项目上下文及帮助的离线行为；core 测试覆盖显式分组和自动后端选择。验证脚本使用 `node --experimental-strip-types scripts/verify-core.ts [core路径] [CLI路径]`，core 路径缺省取 `HERDR_CORE_BIN_PATH` 或 `herdr-core`。

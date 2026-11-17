@@ -1,3 +1,6 @@
+import type { TestContext } from 'node:test';
+import type { CoreTerminal } from '../src/types.js';
+import type { Runtime } from '../src/runtime.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, mkdir, rm } from 'node:fs/promises';
@@ -16,6 +19,7 @@ import {
   lock,
   memberViews,
   reportStatus,
+  statusSnapshot,
 } from '../bin/library.mjs';
 import {
   coreFixture,
@@ -25,8 +29,8 @@ import {
   fixture,
   fakeHerdr,
   temporary,
-} from './helpers.mjs';
-async function started(t) {
+} from './helpers.ts';
+async function started(t: TestContext) {
   const f = await coreFixture(t);
   await run(['core', 'start', f.project], f.env, () => {});
   return f;
@@ -35,7 +39,7 @@ test('offline records inspect history and recover a dead lock without contacting
   const f = await started(t);
   const file = path.join(
     f.state,
-    (await readdir(f.state)).find((n) => n.endsWith('.json')),
+    (await readdir(f.state)).find((n) => n.endsWith('.json'))!,
   );
   const env = {
     ...f.env,
@@ -43,7 +47,7 @@ test('offline records inspect history and recover a dead lock without contacting
     HERDR_ENV: '1',
     HERDR_BIN_PATH: '/does-not-exist',
   };
-  const command = async (...args) => {
+  const command = async (...args: string[]) => {
     let output = '';
     await run(['record', ...args], env, (s) => (output += s));
     return JSON.parse(output);
@@ -70,8 +74,9 @@ test('status json is a single read-only document with recorded and live states',
     before = await coreCalls(f.directory);
   let output = '';
   await run(['core', 'status', 'json', f.project], f.env, (text) => (output += text));
-  const report = JSON.parse(output);
+  const report = JSON.parse(output) as Awaited<ReturnType<typeof statusSnapshot>>;
   assert.equal(report.schema_version, 1);
+  assert.ok(report.startup);
   assert.equal(report.startup.status, 'ready');
   assert.ok(report.members.every((m) => m.matches));
   const after = await coreCalls(f.directory);
@@ -81,7 +86,7 @@ test('status json is a single read-only document with recorded and live states',
 test('status json reports corrupt records as JSON and refuses to fabricate an empty team', async (t) => {
   const f = await started(t),
     record = (await readdir(f.state)).find((n) => n.endsWith('.json'));
-  await writeFile(path.join(f.state, record), 'null');
+  await writeFile(path.join(f.state, record!), 'null');
   let output = '';
   await assert.rejects(
     run(['core', 'status', 'json', f.project], f.env, (text) => (output += text)),
@@ -141,7 +146,7 @@ test('doctor prints local diagnostics even if the backend is unavailable', async
 test('core stop preserves unrelated terminals and can be repeated', async (t) => {
   const f = await started(t),
     file = path.join(f.directory, 'terminals'),
-    terminals = JSON.parse(await readFile(file, 'utf8'));
+    terminals: CoreTerminal[] = JSON.parse(await readFile(file, 'utf8'));
   terminals.push({
     address: 't99',
     name: 'unrelated',
@@ -154,7 +159,7 @@ test('core stop preserves unrelated terminals and can be repeated', async (t) =>
   await run(['core', 'stop', f.project], f.env, () => {});
   assert.equal((await readStartup(f.state)).status, 'stopped');
   assert.deepEqual(
-    JSON.parse(await readFile(file, 'utf8')).map((t) => t.address),
+    JSON.parse(await readFile(file, 'utf8')).map((t: CoreTerminal) => t.address),
     ['t99'],
   );
   await run(['core', 'stop', f.project], f.env, () => {});
@@ -166,8 +171,8 @@ test('core stop preserves unrelated terminals and can be repeated', async (t) =>
 test('core stop preflights all identities before killing the first terminal', async (t) => {
   const f = await started(t),
     file = path.join(f.directory, 'terminals'),
-    terminals = JSON.parse(await readFile(file, 'utf8'));
-  terminals[1].name = 'changed';
+    terminals: CoreTerminal[] = JSON.parse(await readFile(file, 'utf8'));
+  terminals[1]!.name = 'changed';
   await writeFile(file, JSON.stringify(terminals));
   await assert.rejects(
     run(['core', 'stop', f.project], f.env, () => {}),
@@ -192,7 +197,7 @@ test('uncertain stop saves stopping state and does not silently continue', async
   );
   const state = await readStartup(f.state);
   assert.equal(state.status, 'stopping');
-  assert.match(state.error, /uncertain/);
+  assert.match(state.error!, /uncertain/);
   assert.equal(count(await coreCalls(f.directory), 'terminal.rm'), 0);
 });
 test('legacy stop closes only recorded panes, preserving user-added panes', async (t) => {
@@ -201,7 +206,7 @@ test('legacy stop closes only recorded panes, preserving user-added panes', asyn
     client = fakeHerdr();
   await initialize(team, f.project, 'w1', f.state, {}, client, () => {});
   client.panes.push({ pane_id: 'user-pane', terminal_id: 'user-terminal' });
-  const runtime = {
+  const runtime: Runtime = {
     backend: 'herdr',
     project: f.project,
     workspace: 'w1',
@@ -220,7 +225,7 @@ test('legacy stop refuses changed kind without closing any pane', async (t) => {
     team = await loadTeam(f.project),
     client = fakeHerdr();
   await initialize(team, f.project, 'w1', f.state, {}, client, () => {});
-  client.agents[1].agent = 'changed';
+  client.agents[1]!.agent = 'changed';
   await assert.rejects(
     stopTeam(
       {
@@ -242,14 +247,14 @@ test('text and JSON member views both reject an agent whose pane identity change
     client = fakeHerdr();
   await initialize(team, f.project, 'w1', f.state, {}, client, () => {});
   const state = await readStartup(f.state),
-    member = state.members[0];
-  client.panes.find((p) => p.pane_id === member.pane_id).terminal_id = 'replaced';
+    member = state.members[0]!;
+  client.panes.find((p) => p.pane_id === member.pane_id)!.terminal_id = 'replaced';
   const views = memberViews({ backend: 'herdr', project: f.project, workspace: 'w1' }, state, {
     terminals: [],
     agents: client.agents,
     panes: client.panes,
   });
-  assert.equal(views[0].current_status, 'identity changed');
+  assert.equal(views[0]!.current_status, 'identity changed');
   let output = '';
   await reportStatus(
     client,
@@ -299,7 +304,8 @@ test('foreign and malformed lock owners cannot be removed by recovery', async (t
 test('communication diagnosis refuses busy members without sending probes', async (t) => {
   const f = await started(t),
     file = path.join(f.directory, 'terminals'),
-    terminals = JSON.parse(await readFile(file, 'utf8'));
+    terminals: CoreTerminal[] = JSON.parse(await readFile(file, 'utf8'));
+  assert.ok(terminals[1]?.status);
   terminals[1].status.state = 'working';
   await writeFile(file, JSON.stringify(terminals));
   const before = await coreCalls(f.directory);
@@ -334,10 +340,10 @@ test('orphan locks and interrupted recovery guards produce explicit manual diagn
   );
   report = await inspectLock(file);
   assert.equal(report.recovery_process, 'dead');
-  assert.equal(report.recovery_owner.token, 'guard');
+  assert.equal(report.recovery_owner!.token, 'guard');
   assert.equal(report.manual_recovery_required, true);
   await assert.rejects(lock(file), /recovery/);
   await assert.rejects(recoverLock(file), /another lock recovery/);
   await rm(path.join(`${file}.recover.d`, 'owner.json'));
-  assert.match((await inspectLock(file)).recovery_error, /ENOENT/);
+  assert.match((await inspectLock(file)).recovery_error!, /ENOENT/);
 });

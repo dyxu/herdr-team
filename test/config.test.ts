@@ -25,7 +25,7 @@ import {
   parseCommand,
   markdown,
 } from '../bin/library.mjs';
-import { temporary, fixture, root } from './helpers.mjs';
+import { temporary, fixture, root } from './helpers.ts';
 const exec = promisify(execFile);
 const expected = {
   development: ['leader', 'developer', 'reviewer'],
@@ -188,7 +188,7 @@ test('startup identities and Go-compatible config digests remain deterministic',
     'f9b96cf2b22acd7742bbc85de06f8be746d73b73cdbbab99dbbea40aa056b821',
   );
   const first = teamDigest(team);
-  team.members[0].instructions += 'changed';
+  team.members[0]!.instructions += 'changed';
   assert.notEqual(first, teamDigest(team));
   assert.match(first, /^[a-f0-9]{64}$/);
 });
@@ -230,7 +230,7 @@ test('missing args retain the original Go null representation in the digest', as
   await writeFile(file, '---\nid: dev\nkind: codex\n---\nRole for dev');
   assert.notEqual(teamDigest(await loadTeam(f.project)), original);
   assert.equal(
-    (await loadTeam(f.project)).members.find((m) => m.id === 'dev').argsSpecified,
+    (await loadTeam(f.project)).members.find((m) => m.id === 'dev')!.argsSpecified,
     false,
   );
 });

@@ -1,3 +1,4 @@
+import type { TestContext } from 'node:test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, mkdir, symlink, rm } from 'node:fs/promises';
@@ -5,24 +6,24 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { run, TaskStore, loadTeam } from '../bin/library.mjs';
-import { fixture, root } from './helpers.mjs';
-async function setup(t) {
+import { fixture, root } from './helpers.ts';
+async function setup(t: TestContext) {
   const f = await fixture(t);
   const request = path.join(f.directory, 'request.md');
   await writeFile(request, '原始请求：修复名字规范化。\n约束：保留 Unicode。');
-  const file = async (name, value) => {
+  const file = async (name: string, value: unknown) => {
     const p = path.join(f.directory, name);
     await writeFile(p, typeof value === 'string' ? value : JSON.stringify(value));
     return p;
   };
-  const command = async (...args) => {
+  const command = async (...args: string[]) => {
     let output = '';
     await run(['task', ...args, f.project], {}, (s) => (output += s));
     return output;
   };
   return { ...f, request, file, command, store: new TaskStore(f.project) };
 }
-async function create(f, id = 'T001') {
+async function create(f: Awaited<ReturnType<typeof setup>>, id = 'T001') {
   await f.command('create', id, 'dev', f.request);
   const scope = await f.file(`${id}-scope.json`, { allowed_paths: ['helpers.py'] });
   await f.command('scope', id, '1', scope);
@@ -282,7 +283,7 @@ test('legacy manual task index is preserved before generating the active summary
     n.startsWith('legacy-index-'),
   );
   assert.equal(
-    await readFile(path.join(f.project, '.team/tasks', backup), 'utf8'),
+    await readFile(path.join(f.project, '.team/tasks', backup!), 'utf8'),
     'previous notes',
   );
 });

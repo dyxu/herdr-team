@@ -5,11 +5,11 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { workspaceSnapshot, auditWorkspace, run } from '../bin/library.mjs';
-import { fixture } from './helpers.mjs';
+import { fixture } from './helpers.ts';
 const exec = promisify(execFile);
 test('Git audit distinguishes pre-existing, staged, deleted, untracked and unreported changes', async (t) => {
   const f = await fixture(t);
-  const git = async (...args) =>
+  const git = async (...args: string[]) =>
     exec('git', [
       '-c',
       'core.hooksPath=/dev/null',
@@ -48,7 +48,7 @@ test('Git audit distinguishes pre-existing, staged, deleted, untracked and unrep
   const request = path.join(f.directory, 'request.md');
   await writeFile(request, 'implement');
   let output = '';
-  const command = async (...args) => {
+  const command = async (...args: string[]) => {
     output = '';
     await run(['task', ...args, f.project], {}, (s) => (output += s));
     return JSON.parse(output);

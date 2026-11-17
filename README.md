@@ -109,6 +109,6 @@ npm run check
 npm test
 ```
 
-`npm test` 会先构建，再执行自动测试，不启动真实 Agent。`.team` 配置和启动记录无需转换。CLI 已改为子命令，原双横杠操作参数不再接受，调用脚本需同步更新；升级时先结束旧版初始化进程，再构建和使用新版 CLI。
+所有手写源码、测试和工具脚本均为 TypeScript，使用 Node 显式类型剥离执行开发脚本；`npm run check` 严格检查 src、test 和 scripts。`npm test` 会先构建，再执行自动测试，不启动真实 Agent。真实 core 回归也已迁移到 TypeScript，不需要 Python。`.team` 配置和启动记录无需转换。CLI 已改为子命令，原双横杠操作参数不再接受，调用脚本需同步更新；升级时先结束旧版初始化进程，再构建和使用新版 CLI。
 
 实现结构与迁移细节见 [DESIGN.md](DESIGN.md)，真实后端验证、历史记录与故障处理见[验证指南](docs/verification.md)。

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promi
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Core, run, openRuntime, runtimeState, TaskStore, shellQuote } from '../bin/library.mjs';
+import type { Env } from '../src/types.js';
 
 if (process.env.HERDR_TEAM_INTEGRATION !== '1') {
   console.log('SKIP: set HERDR_TEAM_INTEGRATION=1 to run real agents (uses provider quota).');
@@ -12,7 +13,7 @@ if (process.env.HERDR_TEAM_INTEGRATION !== '1') {
 const root = await realpath(await mkdtemp('/tmp/hta-'));
 const project = path.join(root, 'project');
 await mkdir(project);
-const env = {
+const env: Env = {
   ...process.env,
   HC_SOCKET: path.join(root, 'core.sock'),
   HC_SESSION: 'agent-contract',
@@ -26,16 +27,16 @@ for (const name of ['CONFIG', 'DATA', 'STATE', 'CACHE', 'RUNTIME']) {
   await mkdir(directory);
   env[`XDG_${name}${name === 'RUNTIME' ? '_DIR' : '_HOME'}`] = directory;
 }
-const out = (text) => process.stdout.write(text);
+const out = (text: string) => process.stdout.write(text);
 const core = new Core(env.HERDR_CORE_BIN_PATH || 'herdr-core', env);
 let started = false,
   passed = false;
-const task = async (...args) => {
+const task = async (...args: string[]) => {
   let output = '';
   await run(['task', ...args, project], env, (text) => (output += text));
   return output;
 };
-const json = async (name, value) => {
+const json = async (name: string, value: unknown) => {
   const file = path.join(root, name);
   await writeFile(file, JSON.stringify(value));
   return file;
@@ -49,6 +50,7 @@ try {
   await run(['core', 'start', project], env, out);
   const runtime = await openRuntime('core', project, env),
     state = await runtimeState(runtime);
+  assert.ok(state, 'ready startup record exists');
   const store = new TaskStore(project);
   const request = path.join(root, 'request.md');
   await writeFile(request, 'Implement the exact assigned text fixture and verify its bytes.');
@@ -73,10 +75,11 @@ try {
   });
   await assert.rejects(task('report', 'T001', '3', 'worker-a', rejected), /paused/);
   await task('resume', 'T001', '3');
-  const cli = `${shellQuote(process.execPath)} ${shellQuote(env.HERDR_TEAM_CLI_PATH)}`;
-  const deliver = async (id, file, contents) => {
+  const cli = `${shellQuote(process.execPath)} ${shellQuote(env.HERDR_TEAM_CLI_PATH!)}`;
+  const deliver = async (id: string, file: string, contents: string) => {
     const card = await store.read(id),
       member = state.members.find((m) => m.id === card.worker);
+    assert.ok(member, 'assigned worker exists');
     const prompt = `Actual fixture task. Read the current task with ${cli} task show ${id} ${shellQuote(project)}.
 Only modify ${file} plus report artifacts under .team/reports/. Write ${JSON.stringify(contents)} exactly to ${file}.
 Submit a working report before editing; run a real Node assertion of the exact bytes, then submit a ready report using task report ${id} ${card.version} ${card.worker}.
@@ -110,6 +113,7 @@ Do not finish/archive or send completion prompts to other members. End your turn
   await task('assign', 'T001', '4', 'worker-b', handoff);
   await deliver('T001', 'a.txt', 'alpha-reviewed\n');
   const leader = state.members.find((m) => m.id === 'leader');
+  assert.ok(leader, 'leader exists');
   await core.initializeRole(
     leader,
     project,

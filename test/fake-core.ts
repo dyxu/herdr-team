@@ -1,21 +1,29 @@
 import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import type { CoreTerminal } from '../src/types.js';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 const root = process.env.FAKE_CORE_ROOT;
+assert.ok(root, 'FAKE_CORE_ROOT is required');
 if (process.argv.at(-1) !== 'connect') process.exit(2);
 const lines = readline.createInterface({ input: process.stdin });
 lines.once('line', (line) => {
-  const req = JSON.parse(line),
+  const req: {
+      method: string;
+      params: { terminal: string; name: string; cwd: string; labels: Record<string, string> };
+    } = JSON.parse(line),
     terminal = req.params.terminal;
   fs.appendFileSync(path.join(root, 'calls'), `${line}\n`);
   const file = path.join(root, 'terminals');
   const mode = fs.readFileSync(path.join(root, 'mode'), 'utf8');
-  const terminals = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
-  const emit = (result) => {
+  const terminals: CoreTerminal[] = fs.existsSync(file)
+    ? JSON.parse(fs.readFileSync(file, 'utf8'))
+    : [];
+  const emit = (result: unknown) => {
     process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result })}\n`);
   };
-  const fail = (kind, message, hint = 'read before retrying') => {
+  const fail = (kind: string, message: string, hint = 'read before retrying') => {
     process.stdout.write(
       `${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32000, message, data: { kind, hint } } })}\n`,
     );

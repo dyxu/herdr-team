@@ -1,3 +1,4 @@
+import type { LegacyClient } from '../src/types.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
@@ -12,7 +13,7 @@ import {
   initializePromptWithReadiness,
   Herdr,
 } from '../bin/library.mjs';
-import { fixture, fakeHerdr, readStartup, temporary } from './helpers.mjs';
+import { fixture, fakeHerdr, readStartup, temporary } from './helpers.ts';
 
 test('legacy creates named panes, preserves args and cwd, initializes leader last and reuses', async (t) => {
   const f = await fixture(t),
@@ -25,11 +26,11 @@ test('legacy creates named panes, preserves args and cwd, initializes leader las
   assert.ok(state.members.every((m) => m.initialized));
   const prompts = client.calls.filter((a) => a[0] === 'agent' && a[1] === 'prompt');
   assert.equal(prompts.length, 2);
-  assert.match(prompts.at(-1)[2], /-leader$/);
-  assert.ok(prompts[0][3].includes('Shared rules'));
-  assert.ok(prompts[0][3].includes("'/path with spaces/herdr' agent"));
+  assert.match(prompts.at(-1)![2]!, /-leader$/);
+  assert.ok(prompts[0]![3]!.includes('Shared rules'));
+  assert.ok(prompts[0]![3]!.includes("'/path with spaces/herdr' agent"));
   for (const args of client.calls.filter(
-    (a) => ['tab', 'pane'].includes(a[0]) && ['create', 'split'].includes(a[1]),
+    (a) => ['tab', 'pane'].includes(a[0] || '') && ['create', 'split'].includes(a[1] || ''),
   ))
     assert.equal(args[args.indexOf('--cwd') + 1], f.project);
   const started = client.calls.filter((a) => a[1] === 'start').length;
@@ -81,7 +82,15 @@ test('focus failure preserves ready state and retries only focus', async (t) => 
   assert.equal(client.calls.filter((a) => a[1] === 'prompt').length, 2);
 });
 test('readiness refuses changed identities, working agents and blocked dialogs without prompting', async () => {
-  const entry = { name: 'dev', pane_id: 'p1', terminal_id: 't1', kind: 'codex' };
+  const entry = {
+    id: 'dev',
+    started: true,
+    initialized: false,
+    name: 'dev',
+    pane_id: 'p1',
+    terminal_id: 't1',
+    kind: 'codex',
+  };
   for (const changes of [
     { name: 'other' },
     { agent_status: 'working' },
@@ -105,8 +114,17 @@ test('readiness refuses changed identities, working agents and blocked dialogs w
 });
 test('readiness is bounded even when the client returns a late idle response', async () => {
   let prompted = false;
-  const entry = { name: 'dev', pane_id: 'p1', terminal_id: 't1', kind: 'codex' };
-  const client = {
+  const entry = {
+    id: 'dev',
+    started: true,
+    initialized: false,
+    name: 'dev',
+    pane_id: 'p1',
+    terminal_id: 't1',
+    kind: 'codex',
+  };
+  const client: LegacyClient = {
+    async checkKinds() {},
     bin: 'herdr',
     async call(args) {
       if (args[1] === 'prompt') prompted = true;
@@ -184,8 +202,8 @@ test('parallel initialization drains outstanding work, persists successes, and n
     team = await loadTeam(f.project),
     client = fakeHerdr();
   team.members = [
-    team.members[0],
-    ...Array.from({ length: 7 }, (_, i) => ({ ...team.members[1], id: `dev${i}` })),
+    team.members[0]!,
+    ...Array.from({ length: 7 }, (_, i) => ({ ...team.members[1]!, id: `dev${i}` })),
   ];
   team.paths = team.members.map((m) => `members/${m.id}.md`);
   let active = 0,
@@ -194,11 +212,13 @@ test('parallel initialization drains outstanding work, persists successes, and n
   client.prompt = async (args) => {
     active++;
     maximum = Math.max(maximum, active);
-    await new Promise((r) => setTimeout(r, args[2].endsWith('dev0') ? 5 : 25));
+    await new Promise((r) => setTimeout(r, args[2]!.endsWith('dev0') ? 5 : 25));
     active--;
-    if (args[2].endsWith('dev0')) throw new Error('test failure');
+    if (args[2]!.endsWith('dev0')) throw new Error('test failure');
     completed++;
-    return { agent: { agent_status: 'done' } };
+    const agent = client.agents.find((agent) => agent.name === args[2]);
+    assert.ok(agent);
+    return { agent: { ...agent, agent_status: 'done' } };
   };
   await assert.rejects(
     initialize(team, f.project, 'w1', f.state, {}, client, () => {}),
@@ -209,7 +229,7 @@ test('parallel initialization drains outstanding work, persists successes, and n
   assert.ok(completed >= 1);
   assert.equal(active, 0);
   assert.equal(state.members.filter((m) => m.initialized).length, completed);
-  assert.equal(state.members.find((m) => m.id === 'leader').initialized, false);
+  assert.equal(state.members.find((m) => m.id === 'leader')!.initialized, false);
   assert.equal(client.calls.filter((a) => a[1] === 'prompt').length, 4);
 });
 test('status can diagnose existing state even after team configuration becomes invalid', async (t) => {
@@ -234,16 +254,36 @@ test('legacy Worker prompt cannot accidentally install the Leader role', async (
   const f = await fixture(t),
     team = await loadTeam(f.project);
   const state = {
+    status: 'ready',
+    stage: 'ready',
+    workspace_id: 'w1',
+    tab_id: '',
     project: f.project,
     leader_name: 'team-leader',
     members: [
-      { id: 'leader', name: 'team-leader', pane_id: 'p1', terminal_id: 't1' },
-      { id: 'dev', name: 'team-dev', pane_id: 'p2', terminal_id: 't2' },
+      {
+        id: 'leader',
+        name: 'team-leader',
+        pane_id: 'p1',
+        terminal_id: 't1',
+        kind: 'codex',
+        started: true,
+        initialized: true,
+      },
+      {
+        id: 'dev',
+        name: 'team-dev',
+        pane_id: 'p2',
+        terminal_id: 't2',
+        kind: 'codex',
+        started: true,
+        initialized: true,
+      },
     ],
   };
   const prompt = rolePrompt(
     team,
-    team.members.find((m) => m.id === 'dev'),
+    team.members.find((m) => m.id === 'dev')!,
     state,
     'herdr',
     '/path with spaces/herdr-team',

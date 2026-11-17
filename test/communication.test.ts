@@ -1,3 +1,4 @@
+import type { Startup, StartedMember } from '../src/types.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
@@ -5,7 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { checkCommunication, loadTeam, run } from '../bin/library.mjs';
-import { fixture, coreFixture, readStartup } from './helpers.mjs';
+import { fixture, coreFixture, readStartup } from './helpers.ts';
 const exec = promisify(execFile);
 for (const core of [true, false])
   for (const mode of ['success', 'missing', 'stale', 'symlink', 'wrong-identity'])
@@ -15,10 +16,13 @@ for (const core of [true, false])
         bin = path.join(f.directory, "core with 'quote");
       await writeFile(
         bin,
-        `#!/usr/bin/env node\nimport(${JSON.stringify(new URL('./fake-communication.mjs', import.meta.url).href)});\n`,
+        `#!/usr/bin/env -S node --experimental-strip-types\nimport(${JSON.stringify(new URL('./fake-communication.ts', import.meta.url).href)});\n`,
         { mode: 0o700 },
       );
-      const state = {
+      const state: Startup = {
+        status: 'ready',
+        stage: 'ready',
+        tab_id: '',
         project: f.project,
         workspace_id: 'core:test',
         leader_name: 'team-leader',
@@ -32,8 +36,8 @@ for (const core of [true, false])
           initialized: true,
         })),
       };
-      const delivered = [];
-      const deliver = async (entry, prompt) => {
+      const delivered: string[] = [];
+      const deliver = async (entry: StartedMember, prompt: string) => {
         delivered.push(entry.id);
         assert.match(prompt, /separate post-initialization test/);
         const directory = path.join(
@@ -41,7 +45,7 @@ for (const core of [true, false])
           '.team',
           (await readdir(path.join(f.project, '.team'))).find((n) =>
             n.startsWith('.communication-'),
-          ),
+          )!,
         );
         await exec(
           '/bin/sh',
@@ -62,7 +66,7 @@ for (const core of [true, false])
         assert.equal(
           (await readdir(path.join(f.project, '.team'))).some((n) =>
             n.startsWith('.communication-'),
-          ),
+          )!,
           false,
         );
       } else {
@@ -73,7 +77,7 @@ for (const core of [true, false])
         assert.equal(
           (await readdir(path.join(f.project, '.team'))).some((n) =>
             n.startsWith('.communication-'),
-          ),
+          )!,
           true,
         );
         if (mode === 'wrong-identity') assert.deepEqual(delivered, ['leader']);
